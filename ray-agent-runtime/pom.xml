@@ -8,4 +8,15 @@
     </parent>
     <!-- 运行内核不依赖 server 或数据库实现；需要时再加入代码。 -->
     <artifactId>ray-agent-runtime</artifactId>
+    <dependencies>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
 </project>
