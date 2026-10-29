@@ -3,16 +3,17 @@ package cn.ray.agent.server.chat;
 import cn.ray.agent.runtime.model.GenerateRequest;
 import cn.ray.agent.runtime.model.LlmAdapter;
 import cn.ray.agent.runtime.model.Message;
-import cn.ray.agent.runtime.model.ModelRegistry;
 import cn.ray.agent.runtime.model.StreamChunk;
-import org.springframework.http.HttpStatus;
+import cn.ray.agent.server.model.ModelChannelService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -20,26 +21,25 @@ import java.util.concurrent.atomic.AtomicReference;
 /** 连接聊天入口和模型适配器；本阶段每次请求独立，不保存历史。 */
 @Service
 public class ChatApplicationService {
-    private final ModelRegistry registry;
+    private static final Logger LOG = LoggerFactory.getLogger(ChatApplicationService.class);
+    private final ModelChannelService channelService;
 
-    public ChatApplicationService(ModelRegistry registry) {
-        this.registry = registry;
+    public ChatApplicationService(ModelChannelService channelService) {
+        this.channelService = channelService;
     }
 
     /** 创建 SSE 输出并订阅一次模型生成。 */
-    public SseEmitter stream(String message) {
-        LlmAdapter adapter;
-        try {
-            adapter = registry.getRequired("openai-compatible");
-        } catch (IllegalArgumentException e) {
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "模型尚未配置");
-        }
+    public SseEmitter stream(String message, String channelId) {
+        ModelChannelService.ChannelView channel = channelService.select(channelId);
+        LlmAdapter adapter = channelService.adapter(channel);
+        String requestId = UUID.randomUUID().toString();
+        LOG.info("chat start requestId={} channel={} configuredModel={}", requestId, channel.id(), channel.model());
 
         //用户输入包装模型请求
         GenerateRequest request = new GenerateRequest(List.of(new Message(Message.Role.USER, message)));
         SseEmitter emitter = new SseEmitter(60_000L);
         //创建模型事件的接收者
-        ChatSubscriber subscriber = new ChatSubscriber(emitter);
+        ChatSubscriber subscriber = new ChatSubscriber(emitter, requestId, channel.id());
         //注册结束、超时、错误时调用情况
         emitter.onCompletion(subscriber::cancel);
         emitter.onTimeout(subscriber::timeout);
@@ -52,12 +52,16 @@ public class ChatApplicationService {
     /** 把模型事件转为前端业务事件；断开或超时时向模型订阅传递取消。 */
     private static final class ChatSubscriber implements Flow.Subscriber<StreamChunk> {
         private final SseEmitter emitter;
+        private final String requestId;
+        private final String channelId;
         private final AtomicReference<Flow.Subscription> subscription = new AtomicReference<>();
         private final AtomicBoolean terminal = new AtomicBoolean();
         private StreamChunk.Finished finished;
 
-        private ChatSubscriber(SseEmitter emitter) {
+        private ChatSubscriber(SseEmitter emitter, String requestId, String channelId) {
             this.emitter = emitter;
+            this.requestId = requestId;
+            this.channelId = channelId;
         }
 
         @Override
@@ -102,6 +106,7 @@ public class ChatApplicationService {
                 return;
             }
             if (terminal.compareAndSet(false, true)) {
+                LOG.info("chat finished requestId={} channel={} reason={}", requestId, channelId, finished.reason());
                 if (send("done", Map.of("reason", finished.reason().name()))) {
                     emitter.complete();
                 }
@@ -111,6 +116,7 @@ public class ChatApplicationService {
         /** 避免将上游错误细节或凭据直接返回浏览器。 */
         private void fail(String message) {
             if (terminal.compareAndSet(false, true)) {
+                LOG.info("chat failed requestId={} channel={}", requestId, channelId);
                 cancelSubscription();
                 if (send("error", Map.of("message", message))) {
                     emitter.complete();
@@ -134,7 +140,9 @@ public class ChatApplicationService {
         }
 
         private void cancel() {
-            terminal.set(true);
+            if (terminal.compareAndSet(false, true)) {
+                LOG.info("chat cancelled requestId={} channel={}", requestId, channelId);
+            }
             cancelSubscription();
         }
 

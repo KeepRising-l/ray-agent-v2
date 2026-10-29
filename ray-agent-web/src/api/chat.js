@@ -1,9 +1,9 @@
 /** 发送一条消息，逐段读取后端的 text、done、error 事件。 */
-export async function streamChat(message, signal, onText) {
+export async function streamChat(message, signal, onText, channelId) {
   const response = await fetch('/api/chat/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, channelId }),
     signal,
   })
 

@@ -18,6 +18,10 @@
 
 后端通过环境变量 `RAY_MODEL_BASE_URL`、`RAY_MODEL_MODEL` 和 `RAY_MODEL_API_KEY` 可选装配 OpenAI Chat Completions 兼容适配器。Base URL 指向 `/v1` 层级，应用会追加 `/chat/completions`。缺少配置时不注册适配器，应用仍可启动；请勿将真实密钥写入仓库。
 
+可在根目录的本机配置中设置 `ray.model.extra-channels`（逗号分隔），并为每个名称设置 `ray.model.channel.<名称>.model`。额外渠道默认沿用主渠道的地址和密钥，也可以分别配置 `base-url` 和 `api-key`。聊天页按渠道选择模型；渠道名称与配置模型名不证明实际上游供应商身份。修改配置后需要重启后端。
+
+调用的开始、结束和失败状态写入本机 `logs/ray-agent.log`；日志目录和本机模型配置均被 Git 忽略。当前记录用于本地诊断，不是数据库审计记录。
+
 开发阶段的聊天接口未鉴权，后端默认仅监听 127.0.0.1，暂不用于公开部署。手动真实接口探测需额外设置 `RAY_LIVE_TEST=true`，然后在工程根目录运行 `mvn -pl ray-agent-runtime -Dtest=LiveModelSmokeTest test`；默认构建会跳过此探测。探测会向所配置的模型发送一条测试消息，可能产生用量。
 
 ## 运行最小聊天

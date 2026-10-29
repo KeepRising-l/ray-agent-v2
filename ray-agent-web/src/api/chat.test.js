@@ -48,3 +48,19 @@ test('流提前结束且没有完成事件时报告错误', async () => {
     await assert.rejects(streamChat('问题', new AbortController().signal, () => {}), /未收到完成事件/)
   })
 })
+
+test('请求带上选择的渠道名称', async () => {
+  const previous = globalThis.fetch
+  let requestBody
+  globalThis.fetch = async (_url, options) => {
+    requestBody = JSON.parse(options.body)
+    return responseFrom('event:done\ndata:{"reason":"STOP"}\n\n')
+  }
+  try {
+    await streamChat('问题', new AbortController().signal, () => {}, 'second')
+    assert.equal(requestBody.message, '问题')
+    assert.equal(requestBody.channelId, 'second')
+  } finally {
+    globalThis.fetch = previous
+  }
+})

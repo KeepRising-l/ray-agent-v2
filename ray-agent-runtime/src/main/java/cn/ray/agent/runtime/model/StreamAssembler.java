@@ -9,7 +9,7 @@ import java.util.List;
 
 /** 解析一次 Chat Completions SSE 数据，累计结束原因和可选用量。 */
 public final class StreamAssembler {
-    private final ObjectMapper mapper = new ObjectMapper();
+    private final ObjectMapper mapper = new ObjectMapper();     //处理json
     private StreamChunk.FinishReason finishReason;
     private TokenUsage usage;
     private boolean done;

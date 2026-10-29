@@ -28,9 +28,9 @@ public final class OpenAiCompatibleAdapter implements LlmAdapter, AutoCloseable 
     private final URI endpoint;
     private final String apiKey;
     private final String defaultModel;
-    private final RetryPolicy retryPolicy;
-    private final HttpClient client;
-    private final ObjectMapper mapper = new ObjectMapper();
+    private final RetryPolicy retryPolicy;  //重试策略
+    private final HttpClient client;        //后端HTTP客户端 负责把请求发到接口地址endpoint 并接收响应
+    private final ObjectMapper mapper = new ObjectMapper();     //负责处理json，将数据转成json字符串
     private final ExecutorService executor = Executors.newFixedThreadPool(4, task -> {
         Thread thread = new Thread(task, "model-stream");
         thread.setDaemon(true);
@@ -104,14 +104,14 @@ public final class OpenAiCompatibleAdapter implements LlmAdapter, AutoCloseable 
         private final Flow.Subscriber<? super StreamChunk> subscriber;
         private final GenerateRequest request;
         private final Object lock = new Object();
-        private long demand;
-        private boolean started;
-        private volatile boolean terminated;
-        private volatile boolean cancelled;
+        private long demand;        //需求数量
+        private boolean started;    //启动状态
+        private volatile boolean terminated;    //这个流是否已经进入终态
+        private volatile boolean cancelled;     //订阅者是否已经取消这个流
         private volatile InputStream body;
-        private volatile Thread worker;
-        private volatile Throwable protocolError;
-        private boolean emitted;
+        private volatile Thread worker;         //当前执行这次任务的工作线程
+        private volatile Throwable protocolError;   //记录订阅过程中的协议错误
+        private boolean emitted;    //模型是否已经向订阅者发出过事件
 
         private ModelSubscription(Flow.Subscriber<? super StreamChunk> subscriber, GenerateRequest request) { this.subscriber = subscriber; this.request = request; }
         @Override public void request(long n) {
