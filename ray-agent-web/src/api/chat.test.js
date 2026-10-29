@@ -64,3 +64,24 @@ test('请求带上选择的渠道名称', async () => {
     globalThis.fetch = previous
   }
 })
+
+test('会话和请求编号随输入提交，运行编号由服务端元数据提供', async () => {
+  const previous = globalThis.fetch
+  let requestBody
+  let metadata
+  globalThis.fetch = async (_url, options) => {
+    requestBody = JSON.parse(options.body)
+    return responseFrom('event:meta\ndata:{"sessionId":"session-1","runId":"run-1"}\n\nevent:done\ndata:{"reason":"STOP"}\n\n')
+  }
+  try {
+    await streamChat('问题', new AbortController().signal, () => {}, 'channel', {
+      sessionId: 'session-1', clientRequestId: 'request-1', onMeta: value => { metadata = value },
+    })
+    assert.equal(requestBody.sessionId, 'session-1')
+    assert.equal(requestBody.clientRequestId, 'request-1')
+    assert.equal(metadata.runId, 'run-1')
+    assert.notEqual(metadata.runId, requestBody.clientRequestId)
+  } finally {
+    globalThis.fetch = previous
+  }
+})

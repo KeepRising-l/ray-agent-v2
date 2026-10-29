@@ -1,14 +1,15 @@
 /** 发送一条消息，逐段读取后端的 text、done、error 事件。 */
-export async function streamChat(message, signal, onText, channelId) {
+export async function streamChat(message, signal, onText, channelId, options = {}) {
   const response = await fetch('/api/chat/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-    body: JSON.stringify({ message, channelId }),
+    body: JSON.stringify({ message, channelId, sessionId: options.sessionId, clientRequestId: options.clientRequestId }),
     signal,
   })
 
   if (!response.ok) {
-    throw new Error(response.status === 503 ? '模型尚未配置，请先配置后端。' : `请求失败（HTTP ${response.status}）。`)
+    const hint = response.status === 409 ? '当前会话已有运行或请求重复，请查看运行记录。' : `请求失败（HTTP ${response.status}）。`
+    throw new Error(response.status === 503 ? '模型尚未配置，请先配置后端。' : hint)
   }
   if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) {
     throw new Error('服务没有返回有效的流式响应。')
@@ -29,6 +30,7 @@ export async function streamChat(message, signal, onText, channelId) {
     }
     if (!data.length) return
     const payload = JSON.parse(data.join('\n'))
+    if (name === 'meta') options.onMeta?.(payload)
     if (name === 'text' && typeof payload.text === 'string') onText(payload.text)
     if (name === 'error') throw new Error(payload.message || '模型调用失败。')
     if (name === 'done') {

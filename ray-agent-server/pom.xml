@@ -8,6 +8,15 @@
     </parent>
     <artifactId>ray-agent-server</artifactId>
     <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
         <!-- server 组装运行内核，依赖方向保持单向。 -->
         <dependency>
             <groupId>cn.ray.agent</groupId>

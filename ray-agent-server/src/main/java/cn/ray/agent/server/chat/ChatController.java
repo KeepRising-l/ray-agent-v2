@@ -38,9 +38,15 @@ public class ChatController {
         if (request.message().length() > 4000) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "消息不能超过 4000 个字符");
         }
-        return chatService.stream(request.message(), request.channelId());
+        if (request.clientRequestId() != null && (request.clientRequestId().isBlank() || request.clientRequestId().length() > 100)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请求编号无效");
+        }
+        if (request.sessionId() != null && !request.sessionId().matches("[a-f0-9-]{36}")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "会话编号无效");
+        }
+        return chatService.stream(request.message(), request.channelId(), request.sessionId(), request.clientRequestId());
     }
 
     /** 浏览器提交的消息。 */
-    public record ChatRequest(String message, String channelId) { }
+    public record ChatRequest(String message, String channelId, String sessionId, String clientRequestId) { }
 }
