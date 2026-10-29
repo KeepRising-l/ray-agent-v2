@@ -1,6 +1,7 @@
 package cn.ray.agent.server.run;
 
 import cn.ray.agent.server.conversation.ConversationRepository;
+import cn.ray.agent.server.knowledge.DocumentRepository;
 import jakarta.annotation.PreDestroy;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
@@ -14,11 +15,13 @@ import java.sql.Connection;
 public class RunStateService implements ApplicationRunner {
     private final DataSource source;
     private final ConversationRepository store;
+    private final DocumentRepository documents;
     private Connection lease;
 
-    public RunStateService(DataSource source, ConversationRepository store) {
+    public RunStateService(DataSource source, ConversationRepository store, DocumentRepository documents) {
         this.source = source;
         this.store = store;
+        this.documents = documents;
     }
 
     @Override
@@ -32,6 +35,7 @@ public class RunStateService implements ApplicationRunner {
             }
         }
         store.recover();
+        documents.recover();
     }
 
     @PreDestroy

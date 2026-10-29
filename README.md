@@ -1,6 +1,6 @@
 # RayAgent V2
 
-当前提供本机多轮聊天和网页工具循环：PostgreSQL 保存会话、消息与运行轨迹，支持取消、超时、上下文预算、Tavily 搜索和公开网页抓取。登录、知识库与 AUTO 路由尚未实现。
+当前提供本机多轮聊天、网页工具循环和文档向量入库：支持取消、超时、上下文预算、Tavily 搜索、公开网页抓取，以及 TXT/Markdown/文本 PDF 上传、定位分块和 pgvector 写入。登录、知识库问答与 AUTO 路由尚未实现。
 
 首版个人自用，提供三个模式：
 
@@ -53,3 +53,31 @@
 执行轨迹保存工具名、调用编号、状态、耗时和来源，避免记录密钥、工具参数和网页全文。未知用量保持未知，多步用量只有供应商每步提供时才可求完整总和。
 
 验证入口见 [工具循环验收](tests/acceptance/tool-loop.md)：`python tools/verify_r03.py`（模拟模型＋真实网页与数据库）；添加 `--live` 使用本机真实模型及 Tavily，可能消耗模型和搜索用量；添加 `--browser` 验证工具卡和刷新，需本机 Chrome 和 Playwright。脚本只启动/停止自己的进程并清理随机测试 schema；打包与启动脚本请顺序执行，Windows 下运行中的 jar 会被占用。
+
+## 知识库文档入库（R04）
+
+重启后端后，前端切换到“知识库管理”，创建知识库，再上传 TXT、Markdown 或文本 PDF。原文件保存在被 Git 忽略的 `.ray-data/documents`，可通过 `ray.knowledge.storage-root` 修改；数据库保存 owner、知识库、业务文档、不可变文件摘要和版本、片段位置、向量空间与处理状态。原文件用服务端 UUID 存储，文件名不参与路径计算。
+
+Embedding 单独配置在根目录被忽略的 `application-local.properties`：
+
+```properties
+ray.embedding.base-url=https://api.siliconflow.cn/v1
+ray.embedding.model=BAAI/bge-m3
+ray.embedding.dimension=1024
+ray.embedding.revision=v1
+ray.embedding.api-key=填写你自己的密钥
+```
+
+以上协议参考[硅基流动 Embeddings](https://docs.siliconflow.cn/cn/api-reference/embeddings/create-embeddings)，批次按返回 index 还原顺序并校验模型、数量、维度和有限数值。配置中的接口、模型、维度和 revision 共同标识向量空间；密钥不参与指纹，也不传到前端。改模型应使用新的文档版本/后续重建索引流程，不混用旧向量。
+
+处理状态为 UPLOADED → PARSING → CHUNKING → EMBEDDING → READY，失败为 FAILED，服务中断为 INTERRUPTED。上传成功仅代表文件和版本已保存，READY 才代表向量原子发布完成；本轮还不能进行知识库问答。外部 Embedding 调用在事务之外，向量和有效版本指针在同一事务发布。失败的新版本保留旧有效版本；相同内容复用当前版本，最新失败/中断版本可手动重试。
+
+首版只用一个持久任务消费者，不引入 Redis/MQ。服务重启保留 UPLOADED 的待处理任务，把处理中任务标为 INTERRUPTED；不会静默重做外部调用。解析/分块策略随版本保存，策略变更时应上传新版本。当前解析总量上限 20 万字符、1000 个片段，PDF 最多 100 页；分块不跨段落或页，长段落按 800 个 Unicode 码点、120 个码点重叠切分，片段保存页/段和规范化文本中的 UTF-16 偏移。该参数只是基线，尚未做召回效果评估。
+
+上传最多 5 MB，文件摘要、类型及 owner 范围均校验。文本要求 UTF-8，文本 PDF 使用 PDFBox 3.0.8 保留页码；空文本、扫描件、损坏及加密 PDF 明确失败，不执行 OCR。片段预览以文本展示，不执行 Markdown 中的 HTML 或脚本。原文片段会发送到已配置的外部 Embedding 服务。
+
+数据库初始化显式加载 `schema.sql`、`db/migration/V004__knowledge_document.sql` 和 `V005__document_chunk_vector.sql`，在本项目数据库的 public schema 安装 vector 扩展。SQL 文件可重复执行，当前仍使用 Spring SQL 初始化，并未启用 Flyway 的版本迁移机制。向量列用 [pgvector 的 vector 类型](https://github.com/pgvector/pgvector#can-i-store-vectors-with-different-dimensions-in-the-same-column)，通过 profile 和维度限制写入，R05 再实现带 owner/知识库/有效版本过滤的检索。
+
+接口入口为 `/api/knowledge-bases`，包含建库、文档上传、版本列表/状态/片段、向量数量与失败重试。服务端仍固定绑定本机 owner；保留所有权约束不等于已经有登录或多用户认证。文档删除、向量清理和全量重建按后续生命周期课卡继续实现。
+
+验证说明见 [文档入库验收](tests/acceptance/document-ingestion.md)。先完成 `mvn package` 再运行 `python tools/verify_r04.py`，默认是模拟 Embedding＋真实 PostgreSQL/pgvector；添加 `--live` 使用本机真实 Embedding，添加 `--browser --live` 验证真实上传、PDF 页码、刷新及失败展示。测试资料均为自写，测试只清理自己的随机 schema 和 `.ray-data/r04-check-*` 目录。

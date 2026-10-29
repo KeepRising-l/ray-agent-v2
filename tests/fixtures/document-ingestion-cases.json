@@ -1,0 +1,14 @@
+[
+  {"id":"utf8-markdown","input":"自写标题、中文段落和代码块","expect":"规范化换行，标题/段落可追溯，代码中的井号不作为标题"},
+  {"id":"text-pdf","input":"自写两页PDF，第二页包含Pine42","expect":"来源页码2，原文可核对"},
+  {"id":"empty-pdf","input":"无文本的PDF页面","expect":"FAILED，明确说明无文本和OCR未接入"},
+  {"id":"encrypted-pdf","input":"有密码的PDF","expect":"解析失败，不伪装成功"},
+  {"id":"validation","input":"非法类型、超过5MB、非法文件名或错误摘要","expect":"上传被拒绝，不产生有效文档版本"},
+  {"id":"owner","input":"其他owner或其他知识库的文档编号","expect":"拒绝关联和读取"},
+  {"id":"duplicate","input":"相同文档内容重复或并发上传","expect":"同一版本，片段/向量不增生"},
+  {"id":"unicode-chunks","input":"含emoji的长段落","expect":"不切断代理对，长度/重叠有界，片段id可复现"},
+  {"id":"embedding-protocol","input":"返回顺序改变、错误数量、维度、模型、非数值或零向量","expect":"恢复顺序或明确拒绝，不写占位向量"},
+  {"id":"failed-update","input":"新版本解析或Embedding失败","expect":"保留旧有效版本，新版本状态可查"},
+  {"id":"restart","input":"在Embedding阶段强杀测试进程","expect":"重启为INTERRUPTED，显式重试后READY"},
+  {"id":"real-vector","input":"自写中文Markdown与文本PDF","expect":"真实1024维Embedding及pgvector写入读回，状态READY，来源可预览"}
+]

@@ -2,6 +2,7 @@
 node_modules/
 dist/
 logs/
+.ray-data/
 .idea/
 *.iml
 .env

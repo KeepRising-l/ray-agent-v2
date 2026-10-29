@@ -3,6 +3,9 @@ import { onMounted, onUnmounted, ref } from 'vue'
 import { streamChat } from './api/chat.js'
 import RunTracePanel from './components/RunTracePanel.vue'
 import ToolExecutionCard from './components/ToolExecutionCard.vue'
+import KnowledgePanel from './components/KnowledgePanel.vue'
+
+const view = ref('chat')
 
 const message = ref('')
 const liveAnswer = ref('')
@@ -139,6 +142,12 @@ onUnmounted(() => {
 <template>
   <main>
     <h1>RayAgent V2</h1>
+    <nav aria-label="功能切换">
+      <button @click="view = 'chat'">聊天</button>
+      <button @click="view = 'knowledge'">知识库管理</button>
+    </nav>
+    <KnowledgePanel v-if="view === 'knowledge'" />
+    <div v-show="view === 'chat'">
     <p>CHAT 会话 · 历史由服务端保存</p>
     <label for="session">会话</label>
     <select id="session" v-model="sessionId" :disabled="loading" @change="selectSession">
@@ -171,6 +180,7 @@ onUnmounted(() => {
     </select>
     <ToolExecutionCard :events="events" :status="currentRun?.status" />
     <RunTracePanel :run="currentRun" :events="events" />
+    </div>
   </main>
 </template>
 
