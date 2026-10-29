@@ -134,6 +134,21 @@ public class ConversationRepository {
         return jdbc.query("SELECT * FROM ra_event WHERE run_id=? ORDER BY seq", (r, n) -> new Event(r.getInt("seq"), r.getString("type"), r.getString("detail"), r.getLong("created_at")), id);
     }
 
+    /** 与终态写入争用同一行锁，保证工具事件顺序且不在终态之后追加“成功”。 */
+    public Event appendEvent(String owner, String id, String type, String detail) {
+        if (detail.length() > 16000) {
+            throw new IllegalArgumentException("event exceeds limit");
+        }
+        return transactions.execute(tx -> {
+            run(owner, id);
+            jdbc.queryForList("SELECT id FROM ra_run WHERE id=? FOR UPDATE", id);
+            if (!run(owner, id).status().equals("RUNNING")) {
+                return null;
+            }
+            return event(id, type, detail);
+        });
+    }
+
     /** 进程重启后不自动重放模型请求；之前的活动运行标记为中断。 */
     public void recover() {
         var rows = jdbc.query("SELECT id,owner_id FROM ra_run WHERE status IN ('CREATED','RUNNING')", (r, n) -> new String[]{r.getString("id"), r.getString("owner_id")});
@@ -142,9 +157,11 @@ public class ConversationRepository {
         }
     }
 
-    private void event(String id, String type, String detail) {
+    private Event event(String id, String type, String detail) {
         Integer sequence = jdbc.queryForObject("SELECT COALESCE(MAX(seq),0)+1 FROM ra_event WHERE run_id=?", Integer.class, id);
-        jdbc.update("INSERT INTO ra_event VALUES (?,?,?,?,?)", id, sequence, type, detail, System.currentTimeMillis());
+        long now = System.currentTimeMillis();
+        jdbc.update("INSERT INTO ra_event VALUES (?,?,?,?,?)", id, sequence, type, detail, now);
+        return new Event(sequence, type, detail, now);
     }
 
     private ResponseStatusException missing() {

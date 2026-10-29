@@ -34,6 +34,17 @@ test('正确解析跨数据块的中文和完成事件', async () => {
   })
 })
 
+test('工具事件和文本独立传递，工具失败不冒充最终模型错误', async () => {
+  const input = 'event:tool\ndata:{"seq":3,"type":"TOOL_FAILED","detail":"TIMEOUT"}\n\nevent:text\ndata:{"text":"搜索失败"}\n\nevent:done\ndata:{"reason":"STOP"}\n\n'
+  await withResponse(responseFrom(input), async () => {
+    const events = []
+    let text = ''
+    await streamChat('问题', new AbortController().signal, chunk => { text += chunk }, 'channel', { onTool: event => events.push(event) })
+    assert.equal(events[0].type, 'TOOL_FAILED')
+    assert.equal(text, '搜索失败')
+  })
+})
+
 test('已收到部分文本后出错，不显示完成', async () => {
   const input = 'event:text\ndata:{"text":"部分"}\n\nevent:error\ndata:{"message":"模型失败"}\n\n'
   await withResponse(responseFrom(input), async () => {

@@ -2,6 +2,7 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import { streamChat } from './api/chat.js'
 import RunTracePanel from './components/RunTracePanel.vue'
+import ToolExecutionCard from './components/ToolExecutionCard.vue'
 
 const message = ref('')
 const liveAnswer = ref('')
@@ -34,9 +35,15 @@ async function refresh() {
   events.value = currentRun.value ? await json(`/api/runs/${currentRun.value.id}/events`) : []
 }
 
+async function viewRun(event) {
+  currentRun.value = runs.value.find(run => run.id === event.target.value) || null
+  events.value = currentRun.value ? await json(`/api/runs/${currentRun.value.id}/events`) : []
+}
+
 async function selectSession() {
   localStorage.setItem('ray-session', sessionId.value)
   liveAnswer.value = ''
+  events.value = []
   status.value = ''
   await refresh()
 }
@@ -61,7 +68,7 @@ onMounted(async () => {
     if (!channelId.value) status.value = '模型尚未配置，请先配置后端。'
     // 刷新页面后继续查询活动运行的状态；不声称能无损接回原来的 token 流。
     poll = setInterval(async () => {
-      if (!loading.value && currentRun.value?.status === 'RUNNING') {
+      if (!loading.value && runs.value.some(run => run.status === 'RUNNING')) {
         try { await refresh() } catch { status.value = '无法刷新运行状态' }
       }
     }, 1000)
@@ -84,25 +91,35 @@ async function submit() {
     }, channelId.value, {
       sessionId: sessionId.value,
       clientRequestId: crypto.randomUUID(),
-      onMeta: meta => { currentRun.value = { id: meta.runId, status: 'RUNNING', channelId: channelId.value } },
+      onMeta: meta => {
+        events.value = []
+        currentRun.value = { id: meta.runId, status: 'RUNNING', channelId: channelId.value }
+      },
+      onTool: event => {
+        events.value.push(event)
+        status.value = event.type === 'MODEL_STARTED' ? '正在调用模型…'
+          : event.type === 'TOOL_STARTED' ? '正在执行网页工具…'
+          : event.type === 'TOOL_FAILED' ? '网页工具失败，模型正在处理结果…' : '正在继续回答…'
+      },
     })
     status.value = reason === 'STOP' ? '回答完成' : `本次运行结束：${reason}`
     message.value = ''
   } catch (error) {
     if (!disposed) status.value = error.name === 'AbortError' ? '已停止接收' : (error.message || '请求失败')
   } finally {
-    loading.value = false
     controller = null
     if (!disposed) {
       try { await refresh(); liveAnswer.value = '' } catch { status.value = '无法刷新历史，请检查后端' }
     }
+    loading.value = false
   }
 }
 
 async function stop() {
   try {
-    if (currentRun.value?.id) {
-      await json(`/api/runs/${currentRun.value.id}/cancel`, { method: 'POST' })
+    const running = loading.value ? currentRun.value : runs.value.find(run => run.status === 'RUNNING')
+    if (running?.id) {
+      await json(`/api/runs/${running.id}/cancel`, { method: 'POST' })
     }
     controller?.abort()
     status.value = '已请求取消'
@@ -143,11 +160,16 @@ onUnmounted(() => {
       <label for="message">你的消息</label>
       <textarea id="message" v-model="message" maxlength="4000" :disabled="loading" rows="4" />
       <div>
-        <button type="submit" :disabled="loading || !message.trim() || !channelId || currentRun?.status === 'RUNNING'">发送</button>
-        <button v-if="loading || currentRun?.status === 'RUNNING'" type="button" @click="stop">停止</button>
+        <button type="submit" :disabled="loading || !message.trim() || !channelId || runs.some(run => run.status === 'RUNNING')">发送</button>
+        <button v-if="loading || runs.some(run => run.status === 'RUNNING')" type="button" @click="stop">停止</button>
       </div>
     </form>
     <p role="status">{{ status }}</p>
+    <label v-if="runs.length" for="trace-run">查看运行轨迹</label>
+    <select v-if="runs.length" id="trace-run" :value="currentRun?.id" :disabled="loading" @change="viewRun">
+      <option v-for="run in runs" :key="run.id" :value="run.id">{{ run.id.slice(0, 8) }} · {{ run.status }}</option>
+    </select>
+    <ToolExecutionCard :events="events" :status="currentRun?.status" />
     <RunTracePanel :run="currentRun" :events="events" />
   </main>
 </template>

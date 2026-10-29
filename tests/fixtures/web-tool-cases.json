@@ -1,0 +1,13 @@
+[
+  {"id":"plain", "input":"你好", "expect":"一次模型生成，无工具执行"},
+  {"id":"fetch", "input":"调用 web_fetch 抓取 https://example.com/ 并引用来源说明用途", "expect":"工具成功、FETCH 来源、TOOL 回填、后续回答含有效 W 编号"},
+  {"id":"search", "input":"调用 web_search 搜索 Tavily 官方 Search API 文档，并说明 include_answer 的用途", "expect":"真实 Tavily 摘要、SEARCH 来源和有效引用；摘要不冒充完整正文"},
+  {"id":"forbidden", "url":"http://127.0.0.1/secret", "expect":"Java 拒绝；没有成功事件或来源"},
+  {"id":"redirect_private", "url":"https://example.com/redirect", "expect":"模拟重定向到内网时，目标请求未发送"},
+  {"id":"arguments", "arguments":{"url":1,"extra":"rejected"}, "expect":"INVALID_ARGUMENTS，不执行工具"},
+  {"id":"budget", "input":"模拟模型反复提出工具调用", "expect":"有界结束，最后一步不再执行工具，运行 FAILED"},
+  {"id":"timeout", "input":"模拟慢工具/不返回的模型", "expect":"TIMEOUT 或 TIMED_OUT，不伪装成功"},
+  {"id":"cancel", "input":"执行过程中取消", "expect":"上游订阅/工具资源收到取消，无下一步或终态后成功事件"},
+  {"id":"citation", "input":"模拟模型引用本次不存在的 W999", "expect":"INVALID_CITATION，回答标记未完成"},
+  {"id":"empty", "input":"模拟空正文、非网页类型或空搜索结果", "expect":"失败且来源列表为空"}
+]

@@ -1,5 +1,13 @@
 <script setup>
 defineProps({ run: Object, events: Array })
+
+function detail(event) {
+  if (!event.type.startsWith('TOOL_') && !event.type.startsWith('MODEL_')) return event.detail
+  try {
+    const data = JSON.parse(event.detail)
+    return `第 ${data.step} 步 ${data.name || '模型'} ${data.code || ''}`
+  } catch { return '' }
+}
 </script>
 
 <template>
@@ -14,7 +22,7 @@ defineProps({ run: Object, events: Array })
       <summary>运行编号及关键事件</summary>
       <p>{{ run.id }}</p>
       <ol>
-        <li v-for="event in events" :key="event.seq">{{ event.type }} · {{ event.detail }}</li>
+        <li v-for="event in events" :key="event.seq">{{ event.type }} · {{ detail(event) }}</li>
       </ol>
     </details>
   </section>

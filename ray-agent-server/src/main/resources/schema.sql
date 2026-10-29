@@ -34,10 +34,12 @@ CREATE TABLE IF NOT EXISTS ra_event (
     run_id VARCHAR(36) NOT NULL REFERENCES ra_run(id),
     seq INTEGER NOT NULL,
     type VARCHAR(50) NOT NULL,
-    detail VARCHAR(500) NOT NULL,
+    detail TEXT NOT NULL,
     created_at BIGINT NOT NULL,
     PRIMARY KEY(run_id, seq)
 );
+-- R03 事件保存有限的结构化工具元数据和来源；兼容已经存在的 R02 表。
+ALTER TABLE ra_event ALTER COLUMN detail TYPE TEXT;
 CREATE INDEX IF NOT EXISTS idx_session_owner ON ra_session(owner_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_run_session ON ra_run(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_message_session ON ra_message(session_id, created_at);

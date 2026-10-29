@@ -1,6 +1,6 @@
 # RayAgent V2
 
-当前提供本机多轮聊天：PostgreSQL 保存会话、消息与运行记录，支持取消、超时和上下文预算。登录、知识库与网页工具尚未实现。
+当前提供本机多轮聊天和网页工具循环：PostgreSQL 保存会话、消息与运行轨迹，支持取消、超时、上下文预算、Tavily 搜索和公开网页抓取。登录、知识库与 AUTO 路由尚未实现。
 
 首版个人自用，提供三个模式：
 
@@ -37,3 +37,19 @@
 运行有 `RUNNING`、`SUCCEEDED`、`FAILED`、`CANCELLED`、`TIMED_OUT`、`INTERRUPTED` 状态。已收到的部分回答在终态时保存，进程异常退出前未落库的输出可能丢失；重启后仅标记旧运行中断，不自动重放。输入估算与供应商实际用量分别展示，缺失用量保留为空。
 
 常规检查：`mvn test`、前端 `npm test` 和 `npm run build`。真实 PostgreSQL/模拟模型的本机集成检查可运行 `python tools/verify_r02.py`，它通过 WSL 容器 `pgvector-db` 创建并清理独立测试 schema，不调用真实模型。真实数据库 JUnit 检查使用 `RAY_PG_TEST=true` 和 `RAY_TEST_DB_URL`、`RAY_TEST_DB_USER`、`RAY_TEST_DB_PASSWORD`，默认构建跳过它。
+
+## 网页工具（R03）
+
+在根目录被 Git 忽略的 `application-local.properties` 中配置 `ray.tools.web.tavily-api-key`，或使用环境变量 `RAY_TOOLS_WEB_TAVILY_API_KEY`。按 [Tavily 官方接口](https://docs.tavily.com/api-reference/endpoint/search)执行 basic 搜索，最多取三条摘要，不使用其生成式 answer。缺少密钥时，搜索返回 NOT_CONFIGURED，普通聊天和公开网页抓取仍可用。修改配置后重启后端。
+
+本机代理若启用了 Fake-IP，会把域名解析为保留地址（例如 198.18.*），公网策略会拒绝。可在本机配置设置 `ray.tools.web.dns-mode=public-doh`，通过固定 Cloudflare 1.1.1.1 的 [DoH JSON 接口](https://developers.cloudflare.com/1.1.1.1/encryption/dns-over-https/make-api-requests/dns-json/)获取公网 IPv4；默认 system 使用系统 DNS。两种方式都校验所有返回地址并固定实际连接 IP，保留域名进行 TLS 验证；重定向每跳重新检查。DoH 模式会把所访问域名交给该公共解析服务。
+
+请求链路：`ChatApplicationService → ReactLoopAgent → 模型提出工具调用 → ToolExecutor 校验/执行 → TOOL 消息回填 → 下一次模型生成 → 保存回答`。普通问题仍只生成一次。运行默认最多 5 次模型生成、6 次工具尝试、60 秒总时限，单次工具 15 秒；对应 `ray.run.max-model-steps`、`ray.run.max-tool-calls`、`ray.run.timeout-ms`、`ray.run.tool-timeout-ms`。当前采用有界线程池，工具按模型给出的顺序执行。
+
+抓取仅支持公开 HTTP(S) 标准端口的静态 HTML/TXT，最多三跳重定向、1 MB 响应、5000 字符正文。脚本不执行；内网、本机、保留地址、凭据 URL、PDF、登录态网页和非预期压缩响应被拒绝。搜索摘要与抓取正文作为不可信资料交给模型，不改变 Java 允许名单。CHAT 当前只登记网页工具，不读取知识库。
+
+模型引用使用本次运行的 `[W1]` 等编号，页面工具卡展示实际来源链接，并区分“搜索摘要”和“已抓取正文”。校验编号是否存在及有网页资料时是否提供编号，不保证模型每项陈述都已得到语义核验。工具失败同样交回模型，可解释限制或在预算内调整；预算耗尽、来源编号错误或模型中断明确失败。已输出文本作为未完成回答保留。刷新可恢复工具卡；切换运行轨迹可查看之前的来源。历史上下文保留成功问答的文本投影，当前不重放旧工具调用或旧来源编号。
+
+执行轨迹保存工具名、调用编号、状态、耗时和来源，避免记录密钥、工具参数和网页全文。未知用量保持未知，多步用量只有供应商每步提供时才可求完整总和。
+
+验证入口见 [工具循环验收](tests/acceptance/tool-loop.md)：`python tools/verify_r03.py`（模拟模型＋真实网页与数据库）；添加 `--live` 使用本机真实模型及 Tavily，可能消耗模型和搜索用量；添加 `--browser` 验证工具卡和刷新，需本机 Chrome 和 Playwright。脚本只启动/停止自己的进程并清理随机测试 schema；打包与启动脚本请顺序执行，Windows 下运行中的 jar 会被占用。

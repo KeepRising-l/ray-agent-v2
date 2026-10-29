@@ -89,4 +89,17 @@ class PostgresConversationTest {
         store.recover();
         assertEquals("INTERRUPTED", store.run("owner-b", run.id()).status());
     }
+
+    @Test void structuredToolEventsAreOwnedOrderedAndStopAtTerminal() {
+        var session = store.create("tool-owner", "tool trace");
+        var run = store.begin("tool-owner", session.id(), "request", "channel", "model", "question");
+        String detail = "{\"sources\":[{\"url\":\"https://example.com/" + "a".repeat(800) + "\"}]}";
+        var event = store.appendEvent("tool-owner", run.id(), "TOOL_SUCCEEDED", detail);
+        assertEquals(2, event.seq());
+        assertEquals(detail, store.events("tool-owner", run.id()).get(1).detail());
+        assertThrows(ResponseStatusException.class, () -> store.appendEvent("other", run.id(), "TOOL_STARTED", "{}"));
+        assertTrue(store.finish("tool-owner", run.id(), "CANCELLED", "", null, null));
+        assertNull(store.appendEvent("tool-owner", run.id(), "TOOL_SUCCEEDED", "{}"));
+        assertEquals("CANCELLED", store.events("tool-owner", run.id()).get(2).type());
+    }
 }

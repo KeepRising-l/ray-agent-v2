@@ -31,6 +31,7 @@ export async function streamChat(message, signal, onText, channelId, options = {
     if (!data.length) return
     const payload = JSON.parse(data.join('\n'))
     if (name === 'meta') options.onMeta?.(payload)
+    if (name === 'tool') options.onTool?.(payload)
     if (name === 'text' && typeof payload.text === 'string') onText(payload.text)
     if (name === 'error') throw new Error(payload.message || '模型调用失败。')
     if (name === 'done') {
