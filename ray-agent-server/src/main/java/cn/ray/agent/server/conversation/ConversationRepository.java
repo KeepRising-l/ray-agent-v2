@@ -29,10 +29,11 @@ public class ConversationRepository {
 
     /** 会话创建时固定模式和资料范围，切换模式必须新建会话，避免历史混入另一模式。 */
     public Session create(String owner, String title, String mode, List<String> knowledgeBases) {
-        if (!java.util.Set.of("CHAT", "KNOWLEDGE").contains(mode) || knowledgeBases.size() > 5
+        cn.ray.agent.server.chat.ChatMode.parse(mode);
+        if (knowledgeBases == null || knowledgeBases.size() > 5
                 || (mode.equals("CHAT") && !knowledgeBases.isEmpty()) || (mode.equals("KNOWLEDGE") && knowledgeBases.isEmpty())
                 || knowledgeBases.stream().anyMatch(id -> id == null || !id.matches("[a-f0-9-]{36}"))) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请选择有效模式和1到5个知识库；CHAT不接收知识库");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "KNOWLEDGE需要1到5个知识库，AUTO可选0到5个，CHAT不接收知识库");
         }
         return transactions.execute(tx -> {
             for (String kb : knowledgeBases) {

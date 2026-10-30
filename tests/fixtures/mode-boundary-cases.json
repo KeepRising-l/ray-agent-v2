@@ -1,0 +1,122 @@
+{
+  "description": "固定模式边界与AUTO路由小样本，工具失败/证据冲突还需单元测试；不是通用路由准确率。",
+  "cases": [
+    {
+      "id": 1,
+      "mode": "CHAT",
+      "scope": "none",
+      "question": "请问我的资料中的内部巡检计划代号是什么？",
+      "target": null,
+      "expectTools": false,
+      "expectRetrieval": false
+    },
+    {
+      "id": 2,
+      "mode": "KNOWLEDGE",
+      "scope": "demo",
+      "question": "请根据所选资料说明内部巡检计划代号，不要联网搜索。",
+      "target": null,
+      "expectTools": false,
+      "expectRetrieval": true
+    },
+    {
+      "id": 3,
+      "mode": "KNOWLEDGE",
+      "scope": "empty",
+      "question": "请联网搜索最新Java长期支持版本。",
+      "target": null,
+      "expectTools": false,
+      "expectRetrieval": true
+    },
+    {
+      "id": 4,
+      "mode": "AUTO",
+      "scope": "demo",
+      "question": "你好",
+      "target": "DIRECT",
+      "expectTools": false,
+      "expectRetrieval": false
+    },
+    {
+      "id": 5,
+      "mode": "AUTO",
+      "scope": "demo",
+      "question": "我的资料中的内部巡检计划代号是什么？",
+      "target": "KNOWLEDGE",
+      "expectTools": false,
+      "expectRetrieval": true
+    },
+    {
+      "id": 6,
+      "mode": "AUTO",
+      "scope": "none",
+      "question": "我的资料中的内部巡检计划代号是什么？",
+      "target": "CLARIFY",
+      "expectTools": false,
+      "expectRetrieval": false
+    },
+    {
+      "id": 7,
+      "mode": "AUTO",
+      "scope": "none",
+      "question": "请搜索网上最新Java长期支持版本，用网页来源回答。",
+      "target": "WEB",
+      "expectTools": true,
+      "expectRetrieval": false
+    },
+    {
+      "id": 8,
+      "mode": "AUTO",
+      "scope": "demo",
+      "question": "比较我的资料推荐的Java版本与网上最新Java长期支持版本，分别标明来源。",
+      "target": "HYBRID",
+      "expectTools": true,
+      "expectRetrieval": true
+    },
+    {
+      "id": 9,
+      "mode": "AUTO",
+      "scope": "empty",
+      "question": "比较我的资料推荐的Java版本与网上最新Java长期支持版本，分别标明来源。",
+      "target": "HYBRID",
+      "expectTools": true,
+      "expectRetrieval": true
+    },
+    {
+      "id": 10,
+      "mode": "AUTO",
+      "scope": "demo",
+      "question": "那个到底怎么样？",
+      "target": "CLARIFY",
+      "expectTools": false,
+      "expectRetrieval": false
+    },
+    {
+      "id": 11,
+      "mode": "AUTO",
+      "scope": "none",
+      "question": "请解释什么是Java接口。",
+      "target": "DIRECT",
+      "expectTools": false,
+      "expectRetrieval": false
+    },
+    {
+      "id": 12,
+      "mode": "AUTO",
+      "scope": "demo",
+      "question": "我的资料中的内部巡检计划代号是什么？不要联网搜索最新信息。",
+      "target": "KNOWLEDGE",
+      "expectTools": false,
+      "expectRetrieval": true
+    },
+    {
+      "id": 13,
+      "mode": "AUTO",
+      "scope": "demo",
+      "question": "不要读取知识库，请搜索网上最新Java长期支持版本。",
+      "target": "WEB",
+      "expectTools": true,
+      "expectRetrieval": false
+    }
+  ]
+}

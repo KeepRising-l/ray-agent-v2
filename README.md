@@ -84,7 +84,7 @@ ray.embedding.api-key=填写你自己的密钥
 
 ## 知识库问答与索引生命周期（R05）
 
-聊天页选择新会话模式 KNOWLEDGE，勾选1～5个知识库后点击“新建会话”。模式和资料范围在会话创建时固定；CHAT 不带知识库，也不会继承知识库会话的历史。AUTO 在后续 R06 接入。
+聊天页选择新会话模式 KNOWLEDGE，勾选1～5个知识库后点击“新建会话”。模式和资料范围在会话创建时固定；CHAT 不带知识库，也不会继承知识库会话的历史。AUTO 已在 R06 接入，范围和执行规则见下文。
 
 固定流程为 `RetrievalService → EvidenceAssembler → 证据判断 → GroundedAnswerService → 引用校验`。SQL先按 owner、所选知识库、未删除文档、有效 READY 版本和当前 EmbeddingProfile 过滤，再按余弦相似度精确排序，最多取6个片段。当前没有通用硬编码分数阈值；可用 `ray.rag.minimum-score` 设置本数据集需要的阈值，不把相似度当成答案正确概率。
 
@@ -97,3 +97,14 @@ ray.embedding.api-key=填写你自己的密钥
 知识库管理中的“重建索引”保留原文件，生成新文档版本并绑定当前目标向量空间；新索引完整发布后才切换有效版本。历史版本保留但不参与当前检索。删除通过数据库事务取消可见性并移除所有片段/向量，处理中任务不能复活文档；原文件清理使用持久补偿队列，失败后每5秒重试。它不与文件系统组成同一个数据库事务。
 
 第一组固定评估见 [RAG评估说明](tests/evaluation/rag-evaluation.md) 和 `tests/fixtures/rag-cases.json`。`python tools/verify_r05.py` 为模拟模型＋真实数据库；`--live` 使用本机真实模型和 Embedding，运行20问及版本生命周期检查；`--browser --live` 验证模式、引用原文、刷新、删除后引用失效和拒答。评估只报告实际运行的样例，不把小样本结果当通用准确率。
+
+
+## 三模式与AUTO（R06）
+
+新建会话时选择CHAT、KNOWLEDGE或AUTO；AUTO可选0～5个知识库，KNOWLEDGE必须选1～5个，CHAT不接收知识库。范围由服务端校验归属并保存，切换模式需新建会话。
+
+统一链路：`ChatApplicationService → ModeDispatcher → GeneralChatWorkflow / KnowledgeChatWorkflow / AutoChatWorkflow`。AUTO先以规则处理问候、明确资料/联网及禁止要求，其余以严格JSON做有限意图分类。分类失败先澄清，不自动扩大资料或工具范围；运行轨迹保存选择目标与简短原因码，刷新可恢复。
+
+混合链路：`授权检索 → 一次搜索 → 预算允许时抓取首个结果 → 三栏目来源校验 → 输出`。知识库用K编号、网页用W编号，缺失与冲突分别说明；最终混合JSON先缓冲校验，正文随后以SSE发布，检索与工具轨迹仍实时显示。纯CHAT和纯KNOWLEDGE不会经过AUTO分类。分类与生成共用模型预算与时限，用量只在实际提供时累计。
+
+验收入口：[三模式验收](tests/acceptance/three-modes.md)、[本机演示步骤](docs/demo-script.md)。脚本为 `python tools/verify_r06.py --browser`，真实接口加 `--live`；先完成Maven打包再启动脚本。没有部署、登录或多用户认证；不会把路由小样本成功率当通用效果。

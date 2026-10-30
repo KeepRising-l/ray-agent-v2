@@ -13,7 +13,7 @@ import java.util.function.Consumer;
 
 /** 固定检索—证据判断—生成工作流，完全不进入通用Agent，也不提供任何网页工具。 */
 @Component
-public class KnowledgeChatWorkflow {
+public class KnowledgeChatWorkflow implements ChatWorkflow {
     private final GroundedAnswerService answers;
     private final CitationValidator validator = new CitationValidator();
     private final ExecutorService workers = new ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS,
@@ -25,6 +25,11 @@ public class KnowledgeChatWorkflow {
 
     public KnowledgeChatWorkflow(GroundedAnswerService answers) {
         this.answers = answers;
+    }
+
+    @Override
+    public LlmAdapter bind(LlmAdapter model, ChatWorkflow.Scope scope, cn.ray.agent.runtime.agent.RunBudget budget, ChatWorkflow.Events events) {
+        return bind(model, new RetrievalFilter(scope.ownerId(), scope.knowledgeBaseIds()), budget.timeoutMs(), events.metadata());
     }
 
     public LlmAdapter bind(LlmAdapter model, RetrievalFilter scope, long timeoutMs, Consumer<RagStreamEventMapper.Event> sink) {

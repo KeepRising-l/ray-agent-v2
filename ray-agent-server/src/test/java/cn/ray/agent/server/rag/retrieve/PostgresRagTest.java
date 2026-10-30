@@ -100,6 +100,22 @@ class PostgresRagTest {
     }
 
     @Test
+    void threeModeCreationPersistsExplicitScopeAndRejectsForeignKnowledgeBases() {
+        String own = kb("mode-owner");
+        String foreign = kb("another-owner");
+        var emptyAuto = conversations.create("mode-owner", "无资料AUTO", "AUTO", List.of());
+        assertEquals("AUTO", conversations.session("mode-owner", emptyAuto.id()).mode());
+        assertTrue(emptyAuto.knowledgeBaseIds().isEmpty());
+        var scoped = conversations.create("mode-owner", "有资料AUTO", "AUTO", List.of(own));
+        assertEquals(List.of(own), conversations.session("mode-owner", scoped.id()).knowledgeBaseIds());
+        assertThrows(ResponseStatusException.class, () -> conversations.create("mode-owner", "越权", "AUTO", List.of(foreign)));
+        assertThrows(ResponseStatusException.class, () -> conversations.create("mode-owner", "非法", "INVALID", List.of()));
+        assertThrows(ResponseStatusException.class, () -> conversations.create("mode-owner", "CHAT越界", "CHAT", List.of(own)));
+        assertThrows(ResponseStatusException.class, () -> conversations.create("mode-owner", "空KB", "KNOWLEDGE", List.of()));
+        assertThrows(ResponseStatusException.class, () -> conversations.session("another-owner", scoped.id()));
+    }
+
+    @Test
     void ownerKbActiveVersionAndDifferentDimensionsAreFilteredBeforeDistance() {
         String mine = kb("owner-a");
         var own = seed("owner-a", mine, "授权资料 Pine42", profile);

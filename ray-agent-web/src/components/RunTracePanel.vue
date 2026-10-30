@@ -2,6 +2,14 @@
 defineProps({ run: Object, events: Array })
 
 function detail(event) {
+  if (event.type.startsWith('ROUTE_') || event.type.startsWith('HYBRID_')) {
+    try {
+      const data = JSON.parse(event.detail)
+      return data.target ? `${data.target} · ${data.origin} · ${data.reason}`
+        : data.estimatedInputTotal ? `累计输入估算 ${data.estimatedInputTotal}`
+        : data.knowledgeStatus ? `资料 ${data.knowledgeStatus} · 网页 ${data.webStatus}` : ''
+    } catch { return '' }
+  }
   if (event.type.startsWith('RAG_')) {
     try {
       const data = JSON.parse(event.detail)

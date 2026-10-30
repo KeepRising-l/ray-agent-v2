@@ -6,6 +6,8 @@ import ToolExecutionCard from './components/ToolExecutionCard.vue'
 import KnowledgePanel from './components/KnowledgePanel.vue'
 import KnowledgeSelector from './components/KnowledgeSelector.vue'
 import CitationPanel from './components/CitationPanel.vue'
+import ChatModeSelector from './components/ChatModeSelector.vue'
+import RouteDecisionPanel from './components/RouteDecisionPanel.vue'
 
 const view = ref('chat')
 const newMode = ref('CHAT')
@@ -68,8 +70,8 @@ async function selectSession() {
 async function createSession() {
   const session = await json('/api/sessions', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title: newMode.value === 'KNOWLEDGE' ? '知识库会话' : '新会话', mode: newMode.value,
-      knowledgeBaseIds: newMode.value === 'KNOWLEDGE' ? selectedKnowledgeBases.value : [] }),
+    body: JSON.stringify({ title: newMode.value === 'KNOWLEDGE' ? '知识库会话' : newMode.value === 'AUTO' ? 'AUTO会话' : '新会话', mode: newMode.value,
+      knowledgeBaseIds: newMode.value !== 'CHAT' ? selectedKnowledgeBases.value : [] }),
   })
   sessionId.value = session.id
   await selectSession()
@@ -120,6 +122,11 @@ async function submit() {
         status.value = event.type === 'MODEL_STARTED' ? '正在调用模型…'
           : event.type === 'TOOL_STARTED' ? '正在执行网页工具…'
           : event.type === 'TOOL_FAILED' ? '网页工具失败，模型正在处理结果…' : '正在继续回答…'
+      },
+      onRoute: event => {
+        events.value.push(event)
+        status.value = event.type === 'ROUTE_DECIDED' ? '已确定回答路径…'
+          : event.type === 'HYBRID_STARTED' ? '正在组合资料与网页…' : '正在处理AUTO请求…'
       },
       onRag: event => {
         events.value.push(event)
@@ -173,12 +180,9 @@ onUnmounted(() => {
     <KnowledgePanel v-if="view === 'knowledge'" />
     <div v-show="view === 'chat'">
     <p>当前会话模式：{{ sessionMode }} · 历史由服务端保存</p>
-    <label for="new-mode">新会话模式</label>
-    <select id="new-mode" v-model="newMode" :disabled="loading">
-      <option value="CHAT">CHAT：智能对话</option>
-      <option value="KNOWLEDGE">KNOWLEDGE：只根据知识库回答</option>
-    </select>
-    <KnowledgeSelector v-if="newMode === 'KNOWLEDGE'" v-model="selectedKnowledgeBases" :bases="knowledgeBases" :disabled="loading" />
+    <ChatModeSelector v-model="newMode" :disabled="loading" />
+    <KnowledgeSelector v-if="newMode !== 'CHAT'" v-model="selectedKnowledgeBases" :bases="knowledgeBases" :disabled="loading" />
+    <p v-if="newMode === 'AUTO'">AUTO 可选 0～5 个知识库；未选择时只对话、联网或请求补充资料范围。</p>
     <p>选择模式和资料范围后点击“新建会话”；已有会话的模式与知识库范围保持固定。</p>
     <label for="session">会话</label>
     <select id="session" v-model="sessionId" :disabled="loading" @change="selectSession">
@@ -210,6 +214,7 @@ onUnmounted(() => {
       <option v-for="run in runs" :key="run.id" :value="run.id">{{ run.id.slice(0, 8) }} · {{ run.status }}</option>
     </select>
     <ToolExecutionCard :events="events" :status="currentRun?.status" />
+    <RouteDecisionPanel :events="events" />
     <CitationPanel :run="currentRun" :events="events" />
     <RunTracePanel :run="currentRun" :events="events" />
     </div>
