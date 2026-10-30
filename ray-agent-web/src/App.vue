@@ -4,8 +4,15 @@ import { streamChat } from './api/chat.js'
 import RunTracePanel from './components/RunTracePanel.vue'
 import ToolExecutionCard from './components/ToolExecutionCard.vue'
 import KnowledgePanel from './components/KnowledgePanel.vue'
+import KnowledgeSelector from './components/KnowledgeSelector.vue'
+import CitationPanel from './components/CitationPanel.vue'
 
 const view = ref('chat')
+const newMode = ref('CHAT')
+const selectedKnowledgeBases = ref([])
+const knowledgeBases = ref([])
+const sessionMode = ref('CHAT')
+const ragRefused = ref(false)
 
 const message = ref('')
 const liveAnswer = ref('')
@@ -23,6 +30,11 @@ let controller = null
 let poll = null
 let disposed = false
 
+async function openChat() {
+  view.value = 'chat'
+  try { knowledgeBases.value = await json('/api/knowledge-bases') } catch { status.value = '无法读取知识库' }
+}
+
 async function json(url, options) {
   const response = await fetch(url, options)
   if (!response.ok) throw new Error(`操作失败（HTTP ${response.status}）`)
@@ -31,7 +43,9 @@ async function json(url, options) {
 
 async function refresh() {
   sessions.value = await json('/api/sessions')
+  knowledgeBases.value = await json('/api/knowledge-bases')
   if (!sessionId.value) return
+  sessionMode.value = sessions.value.find(session => session.id === sessionId.value)?.mode || 'CHAT'
   messages.value = await json(`/api/sessions/${sessionId.value}/messages`)
   runs.value = await json(`/api/sessions/${sessionId.value}/runs`)
   currentRun.value = runs.value[0] || null
@@ -54,7 +68,8 @@ async function selectSession() {
 async function createSession() {
   const session = await json('/api/sessions', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title: '新会话' }),
+    body: JSON.stringify({ title: newMode.value === 'KNOWLEDGE' ? '知识库会话' : '新会话', mode: newMode.value,
+      knowledgeBaseIds: newMode.value === 'KNOWLEDGE' ? selectedKnowledgeBases.value : [] }),
   })
   sessionId.value = session.id
   await selectSession()
@@ -65,6 +80,7 @@ onMounted(async () => {
     channels.value = await json('/api/model-channels')
     channelId.value = channels.value[0]?.id || ''
     sessions.value = await json('/api/sessions')
+    knowledgeBases.value = await json('/api/knowledge-bases')
     const saved = localStorage.getItem('ray-session')
     sessionId.value = sessions.value.find(session => session.id === saved)?.id || sessions.value[0]?.id || ''
     if (sessionId.value) await refresh()
@@ -85,6 +101,7 @@ async function submit() {
   if (!text || loading.value) return
   loading.value = true
   liveAnswer.value = ''
+  ragRefused.value = false
   status.value = '正在生成…'
   controller = new AbortController()
   try {
@@ -104,8 +121,15 @@ async function submit() {
           : event.type === 'TOOL_STARTED' ? '正在执行网页工具…'
           : event.type === 'TOOL_FAILED' ? '网页工具失败，模型正在处理结果…' : '正在继续回答…'
       },
+      onRag: event => {
+        events.value.push(event)
+        if (event.type === 'RAG_REFUSED') ragRefused.value = true
+        status.value = event.type === 'RAG_RETRIEVAL_STARTED' ? '正在检索所选知识库…'
+          : event.type === 'RAG_JUDGE_STARTED' ? '正在核对资料是否足够…'
+          : event.type === 'RAG_REFUSED' ? '资料依据不足' : '正在根据资料回答…'
+      },
     })
-    status.value = reason === 'STOP' ? '回答完成' : `本次运行结束：${reason}`
+    status.value = ragRefused.value ? '资料依据不足' : reason === 'STOP' ? '回答完成' : `本次运行结束：${reason}`
     message.value = ''
   } catch (error) {
     if (!disposed) status.value = error.name === 'AbortError' ? '已停止接收' : (error.message || '请求失败')
@@ -143,17 +167,24 @@ onUnmounted(() => {
   <main>
     <h1>RayAgent V2</h1>
     <nav aria-label="功能切换">
-      <button @click="view = 'chat'">聊天</button>
+      <button @click="openChat">聊天</button>
       <button @click="view = 'knowledge'">知识库管理</button>
     </nav>
     <KnowledgePanel v-if="view === 'knowledge'" />
     <div v-show="view === 'chat'">
-    <p>CHAT 会话 · 历史由服务端保存</p>
+    <p>当前会话模式：{{ sessionMode }} · 历史由服务端保存</p>
+    <label for="new-mode">新会话模式</label>
+    <select id="new-mode" v-model="newMode" :disabled="loading">
+      <option value="CHAT">CHAT：智能对话</option>
+      <option value="KNOWLEDGE">KNOWLEDGE：只根据知识库回答</option>
+    </select>
+    <KnowledgeSelector v-if="newMode === 'KNOWLEDGE'" v-model="selectedKnowledgeBases" :bases="knowledgeBases" :disabled="loading" />
+    <p>选择模式和资料范围后点击“新建会话”；已有会话的模式与知识库范围保持固定。</p>
     <label for="session">会话</label>
     <select id="session" v-model="sessionId" :disabled="loading" @change="selectSession">
       <option v-for="session in sessions" :key="session.id" :value="session.id">{{ session.title }} · {{ session.id.slice(0, 8) }}</option>
     </select>
-    <button :disabled="loading" @click="createSession">新建会话</button>
+    <button :disabled="loading || (newMode === 'KNOWLEDGE' && !selectedKnowledgeBases.length)" @click="createSession">新建会话</button>
     <section aria-label="历史消息">
       <article v-for="item in messages" :key="item.id">
         <strong>{{ item.role === 'USER' ? '你' : '助手' }}{{ item.complete ? '' : '（未完成）' }}</strong>
@@ -179,6 +210,7 @@ onUnmounted(() => {
       <option v-for="run in runs" :key="run.id" :value="run.id">{{ run.id.slice(0, 8) }} · {{ run.status }}</option>
     </select>
     <ToolExecutionCard :events="events" :status="currentRun?.status" />
+    <CitationPanel :run="currentRun" :events="events" />
     <RunTracePanel :run="currentRun" :events="events" />
     </div>
   </main>

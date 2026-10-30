@@ -24,20 +24,39 @@ public class ConversationRepository {
     }
 
     public Session create(String owner, String title) {
-        String id = UUID.randomUUID().toString();
-        long now = System.currentTimeMillis();
-        jdbc.update("INSERT INTO ra_session VALUES (?, ?, ?, 'CHAT', ?)", id, owner, title, now);
-        return session(owner, id);
+        return create(owner, title, "CHAT", List.of());
+    }
+
+    /** 会话创建时固定模式和资料范围，切换模式必须新建会话，避免历史混入另一模式。 */
+    public Session create(String owner, String title, String mode, List<String> knowledgeBases) {
+        if (!java.util.Set.of("CHAT", "KNOWLEDGE").contains(mode) || knowledgeBases.size() > 5
+                || (mode.equals("CHAT") && !knowledgeBases.isEmpty()) || (mode.equals("KNOWLEDGE") && knowledgeBases.isEmpty())
+                || knowledgeBases.stream().anyMatch(id -> id == null || !id.matches("[a-f0-9-]{36}"))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请选择有效模式和1到5个知识库；CHAT不接收知识库");
+        }
+        return transactions.execute(tx -> {
+            for (String kb : knowledgeBases) {
+                if (jdbc.queryForObject("SELECT COUNT(*) FROM ra_knowledge_base WHERE id=? AND owner_id=?", Integer.class, kb, owner) != 1) {
+                    throw new ResponseStatusException(HttpStatus.NOT_FOUND, "知识库不存在");
+                }
+            }
+            String id = UUID.randomUUID().toString();
+            jdbc.update("INSERT INTO ra_session VALUES (?,?,?,?,?)", id, owner, title, mode, System.currentTimeMillis());
+            for (String kb : new java.util.TreeSet<>(knowledgeBases)) {
+                jdbc.update("INSERT INTO ra_session_knowledge_base VALUES (?,?)", id, kb);
+            }
+            return session(owner, id);
+        });
     }
 
     public List<Session> sessions(String owner) {
         return jdbc.query("SELECT * FROM ra_session WHERE owner_id=? ORDER BY created_at DESC, id", (r, n) ->
-                new Session(r.getString("id"), r.getString("title"), r.getString("mode"), r.getLong("created_at")), owner);
+                new Session(r.getString("id"), r.getString("title"), r.getString("mode"), r.getLong("created_at"), knowledgeBases(r.getString("id"), r.getString("mode"))), owner);
     }
 
     public Session session(String owner, String id) {
         var rows = jdbc.query("SELECT * FROM ra_session WHERE id=? AND owner_id=?", (r, n) ->
-                new Session(r.getString("id"), r.getString("title"), r.getString("mode"), r.getLong("created_at")), id, owner);
+                new Session(r.getString("id"), r.getString("title"), r.getString("mode"), r.getLong("created_at"), knowledgeBases(r.getString("id"), r.getString("mode"))), id, owner);
         if (rows.isEmpty()) {
             throw missing();
         }
@@ -86,6 +105,11 @@ public class ConversationRepository {
             jdbc.update("UPDATE ra_run SET estimated_input=? WHERE id=?", estimated, id);
             event(id, "CONTEXT_SELECTED", "estimatedInput=" + estimated + ", omittedTurns=" + omitted);
         });
+    }
+
+    /** 固定RAG的多次生成按各次实际组装的消息累计估算；与供应商usage分别展示。 */
+    public void updateInputEstimate(String owner, String id, int estimated) {
+        jdbc.update("UPDATE ra_run SET estimated_input=? WHERE id=? AND owner_id=? AND status='RUNNING'", estimated, id, owner);
     }
 
     /** 单一事务写入唯一终态、最终/部分回答与用量；重复完成不会追加第二条回答。 */
@@ -168,7 +192,14 @@ public class ConversationRepository {
         return new ResponseStatusException(HttpStatus.NOT_FOUND, "会话或运行不存在");
     }
 
-    public record Session(String id, String title, String mode, long createdAt) { }
+    private List<String> knowledgeBases(String id, String mode) {
+        if (mode.equals("CHAT")) {
+            return List.of();
+        }
+        return jdbc.queryForList("SELECT kb_id FROM ra_session_knowledge_base WHERE session_id=? ORDER BY kb_id", String.class, id);
+    }
+
+    public record Session(String id, String title, String mode, long createdAt, List<String> knowledgeBaseIds) { }
     public record ChatMessage(String id, String runId, String role, String content, boolean complete) { }
     public record Run(String id, String sessionId, String clientRequestId, String channelId, String configuredModel,
                       String status, long createdAt, Long endedAt, Integer estimatedInput, Integer inputTokens,

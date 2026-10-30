@@ -42,7 +42,7 @@ class PostgresKnowledgeTest {
         admin.execute("CREATE SCHEMA " + schema);
         var isolated = new DriverManagerDataSource(System.getenv("RAY_TEST_DB_URL") + "?currentSchema=" + schema, System.getenv("RAY_TEST_DB_USER"), System.getenv("RAY_TEST_DB_PASSWORD"));
         new ResourceDatabasePopulator(new ClassPathResource("schema.sql"), new ClassPathResource("db/migration/V004__knowledge_document.sql"),
-                new ClassPathResource("db/migration/V005__document_chunk_vector.sql")).execute(isolated);
+                new ClassPathResource("db/migration/V005__document_chunk_vector.sql"), new ClassPathResource("db/migration/V006__knowledge_chat_lifecycle.sql")).execute(isolated);
         jdbc = new JdbcTemplate(isolated);
         store = new DocumentRepository(jdbc, new DataSourceTransactionManager(isolated), new ChunkRepository(jdbc), new PgVectorStore(jdbc));
         files = new DocumentFileStore(storage.toString());

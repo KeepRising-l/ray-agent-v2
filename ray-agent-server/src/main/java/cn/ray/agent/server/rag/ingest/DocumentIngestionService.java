@@ -20,6 +20,7 @@ public class DocumentIngestionService {
     private final DocumentFileStore files;
     private final ParserSelector parsers;
     private final EmbeddingClient embedding;
+    private final DocumentDeleteService deletion;
     private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor(task -> {
         Thread thread = new Thread(task, "document-ingestion");
         thread.setDaemon(true);
@@ -28,10 +29,17 @@ public class DocumentIngestionService {
     private volatile boolean closing;
 
     public DocumentIngestionService(DocumentRepository store, DocumentFileStore files, ParserSelector parsers, EmbeddingClient embedding) {
+        this(store, files, parsers, embedding, new DocumentDeleteService(store, files));
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public DocumentIngestionService(DocumentRepository store, DocumentFileStore files, ParserSelector parsers,
+                                     EmbeddingClient embedding, DocumentDeleteService deletion) {
         this.store = store;
         this.files = files;
         this.parsers = parsers;
         this.embedding = embedding;
+        this.deletion = deletion;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -44,6 +52,7 @@ public class DocumentIngestionService {
             return;
         }
         try {
+            deletion.cleanup();
             var work = store.claim();
             if (work != null) {
                 process(work);
@@ -60,9 +69,8 @@ public class DocumentIngestionService {
         try {
             byte[] bytes = files.read(work.storageKey(), work.version().sha256());
             var parser = parsers.select(work.version().fileType());
-            if (!parser.version().equals(work.version().parserVersion()) || !ChunkPolicy.DEFAULT.id().equals(work.version().chunkPolicy())) {
-                throw new DocumentParser.Failure("处理策略已变化，请重新上传生成新版本");
-            }
+            new IngestionCheckpoint(work.version().parserVersion(), work.version().chunkPolicy(), work.version().targetProfile())
+                    .verify(parser.version(), ChunkPolicy.DEFAULT.id(), embedding.profile().id());
             var sections = parser.parse(bytes);
             store.stage(id, "PARSING", "CHUNKING");
             stage = "CHUNKING";

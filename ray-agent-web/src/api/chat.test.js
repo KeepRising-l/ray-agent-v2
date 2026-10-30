@@ -45,6 +45,16 @@ test('工具事件和文本独立传递，工具失败不冒充最终模型错�
   })
 })
 
+test('知识库事件独立传递，不把证据判断显示成回答文本', async () => {
+  await withResponse(responseFrom('event:rag\ndata:{"type":"RAG_DECISION","detail":"{}"}\n\nevent:text\ndata:{"text":"答案 [K1]"}\n\nevent:done\ndata:{"reason":"STOP"}\n\n'), async () => {
+    const events = []
+    let text = ''
+    await streamChat('question', new AbortController().signal, value => { text += value }, 'channel', { onRag: event => events.push(event) })
+    assert.equal(events[0].type, 'RAG_DECISION')
+    assert.equal(text, '答案 [K1]')
+  })
+})
+
 test('已收到部分文本后出错，不显示完成', async () => {
   const input = 'event:text\ndata:{"text":"部分"}\n\nevent:error\ndata:{"message":"模型失败"}\n\n'
   await withResponse(responseFrom(input), async () => {

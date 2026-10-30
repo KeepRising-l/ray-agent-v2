@@ -27,7 +27,8 @@ public class ConversationController {
         if (request.title() == null || request.title().isBlank() || request.title().length() > 100) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "会话标题需为 1 到 100 字符");
         }
-        return store.create(owner.id(), request.title());
+        return store.create(owner.id(), request.title(), request.mode() == null ? "CHAT" : request.mode(),
+                request.knowledgeBaseIds() == null ? List.of() : request.knowledgeBaseIds());
     }
 
     @GetMapping("/{id}/messages")
@@ -40,5 +41,5 @@ public class ConversationController {
         return store.runs(owner.id(), id);
     }
 
-    public record CreateSession(String title) { }
+    public record CreateSession(String title, String mode, List<String> knowledgeBaseIds) { }
 }

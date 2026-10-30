@@ -3,6 +3,7 @@ package cn.ray.agent.server.knowledge;
 import cn.ray.agent.server.conversation.LocalOwner;
 import cn.ray.agent.server.rag.chunk.DocumentChunk;
 import cn.ray.agent.server.rag.embedding.OpenAiEmbeddingClient;
+import cn.ray.agent.server.rag.ingest.DocumentReindexService;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -18,14 +19,18 @@ public class DocumentUploadController {
     private final DocumentRepository store;
     private final LocalOwner owner;
     private final OpenAiEmbeddingClient embedding;
+    private final DocumentDeleteService deletion;
+    private final DocumentReindexService reindex;
 
     public DocumentUploadController(KnowledgeBaseService bases, DocumentService documents, DocumentRepository store,
-                                    LocalOwner owner, OpenAiEmbeddingClient embedding) {
+                                    LocalOwner owner, OpenAiEmbeddingClient embedding, DocumentDeleteService deletion, DocumentReindexService reindex) {
         this.bases = bases;
         this.documents = documents;
         this.store = store;
         this.owner = owner;
         this.embedding = embedding;
+        this.deletion = deletion;
+        this.reindex = reindex;
     }
 
     @GetMapping
@@ -82,4 +87,15 @@ public class DocumentUploadController {
     }
 
     public record CreateBase(String name) { }
+
+    @DeleteMapping("/{kb}/documents/{doc}")
+    public Map<String, Boolean> delete(@PathVariable String kb, @PathVariable String doc) {
+        deletion.delete(owner.id(), kb, doc);
+        return Map.of("deleted", true);
+    }
+
+    @PostMapping("/{kb}/documents/{doc}/reindex")
+    public DocumentRepository.Version reindex(@PathVariable String kb, @PathVariable String doc) {
+        return reindex.reindex(owner.id(), kb, doc);
+    }
 }

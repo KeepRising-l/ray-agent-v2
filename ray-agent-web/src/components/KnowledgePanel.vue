@@ -143,6 +143,33 @@ async function retry() {
   } catch (error) { status.value = error.message } finally { busy.value = false }
 }
 
+async function reindex() {
+  busy.value = true
+  try {
+    const version = await api(`${docPath()}/reindex`, { method: 'POST' })
+    trackedVersion.value = version.id
+    status.value = '已创建新的索引版本，旧有效版本会保留到重建完成'
+    await refresh(true)
+    versions.value = await api(docPath() + '/versions')
+    versionId.value = version.id
+    await loadVersion()
+  } catch (error) { status.value = error.message } finally { busy.value = false }
+}
+
+async function removeDocument() {
+  if (!window.confirm('删除此文档及其索引？历史引用将失效。')) return
+  busy.value = true
+  try {
+    await api(docPath(), { method: 'DELETE' })
+    selectedDocument.value = null
+    detail.value = null
+    chunks.value = []
+    versions.value = []
+    status.value = '文档和索引已删除，原文件清理失败时会由后台重试'
+    await refresh(true)
+  } catch (error) { status.value = error.message } finally { busy.value = false }
+}
+
 onMounted(async () => {
   try {
     embedding.value = await api('/embedding')
@@ -166,7 +193,7 @@ onUnmounted(() => {
 <template>
   <section aria-label="知识库管理">
     <h2>知识库与文档</h2>
-    <p>上传并查看入库结果。知识库问答将在下一阶段接入。</p>
+    <p>上传并查看入库结果。返回聊天页面，新建 KNOWLEDGE 会话后即可根据资料提问。</p>
     <p v-if="embedding">向量模型：{{ embedding.model }}（{{ embedding.dimension }} 维）{{ embedding.configured ? '' : '，尚未配置密钥' }}</p>
     <form @submit.prevent="createBase">
       <label for="kb-name">新知识库名称</label>
@@ -194,6 +221,8 @@ onUnmounted(() => {
     </ul>
     <section v-if="detail" aria-label="文档版本详情">
       <h3>{{ selectedDocument.name }}</h3>
+      <button :disabled="busy || isProcessing(selectedDocument.status)" @click="reindex">重建索引</button>
+      <button :disabled="busy" @click="removeDocument">删除文档</button>
       <label for="document-version">版本</label>
       <select id="document-version" v-model="versionId" :disabled="busy" @change="loadVersion">
         <option v-for="version in versions" :key="version.id" :value="version.id">v{{ version.version }} · {{ documentStates[version.status] }}</option>

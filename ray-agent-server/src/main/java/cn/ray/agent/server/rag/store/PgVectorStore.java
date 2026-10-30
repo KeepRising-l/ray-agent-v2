@@ -2,6 +2,7 @@ package cn.ray.agent.server.rag.store;
 
 import cn.ray.agent.server.rag.chunk.DocumentChunk;
 import cn.ray.agent.server.rag.embedding.EmbeddingProfile;
+import cn.ray.agent.server.rag.retrieve.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import java.util.List;
@@ -37,5 +38,45 @@ public class PgVectorStore implements VectorStore {
     @Override
     public int count(String versionId) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM ra_chunk_vector v JOIN ra_document_chunk c ON c.id=v.chunk_id WHERE c.version_id=?", Integer.class, versionId);
+    }
+
+    private String scopeSql(RetrievalFilter filter) {
+        return " FROM ra_chunk_vector x JOIN ra_document_chunk c ON c.id=x.chunk_id "
+                + "JOIN ra_document_version v ON v.id=c.version_id JOIN ra_document d ON d.id=v.document_id "
+                + "JOIN ra_knowledge_base k ON k.id=d.kb_id WHERE d.owner_id=? AND k.owner_id=? "
+                + "AND d.kb_id IN (" + String.join(",", java.util.Collections.nCopies(filter.knowledgeBaseIds().size(), "?")) + ") "
+                + "AND d.deleted_at IS NULL AND d.active_version_id=v.id AND v.status='READY' "
+                + "AND x.profile_id=? AND v.embedding_profile=? AND x.dimension=?";
+    }
+
+    private java.util.ArrayList<Object> scopeArgs(RetrievalFilter filter, EmbeddingProfile profile) {
+        var args = new java.util.ArrayList<Object>();
+        args.add(filter.ownerId());
+        args.add(filter.ownerId());
+        args.addAll(filter.knowledgeBaseIds());
+        args.add(profile.id());
+        args.add(profile.id());
+        args.add(profile.dimension());
+        return args;
+    }
+
+    public boolean hasEligible(RetrievalFilter filter, EmbeddingProfile profile) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 " + scopeSql(filter) + ")", Boolean.class, scopeArgs(filter, profile).toArray()));
+    }
+
+    /** MATERIALIZED 先收拢授权、当前版本与向量空间，再计算距离，避免不同维度参与运算。 */
+    public List<RetrievedChunk> search(RetrievalQuery query, EmbeddingProfile profile, float[] vector) {
+        profile.validate(vector);
+        String value = IntStream.range(0, vector.length).mapToObj(index -> Float.toString(vector[index])).collect(Collectors.joining(",", "[", "]"));
+        String sql = "WITH eligible AS MATERIALIZED (SELECT c.*,d.kb_id,d.id AS document_id,d.name,v.version,x.embedding "
+                + scopeSql(query.filter()) + ") SELECT *,1-(embedding OPERATOR(public.<=>) CAST(? AS public.vector)) AS score "
+                + "FROM eligible ORDER BY score DESC,id LIMIT ?";
+        var args = scopeArgs(query.filter(), profile);
+        args.add(value);
+        args.add(query.limit());
+        var hits = jdbc.query(sql, (r, n) -> new RetrievedChunk(r.getString("id"), r.getString("kb_id"), r.getString("document_id"),
+                r.getString("name"), r.getString("version_id"), r.getInt("version"), r.getString("content"), (Integer) r.getObject("page"),
+                r.getInt("paragraph"), r.getString("heading"), r.getInt("start_offset"), r.getInt("end_offset"), r.getDouble("score")), args.toArray());
+        return hits.stream().filter(hit -> query.minimumScore() == null || hit.score() >= query.minimumScore()).toList();
     }
 }

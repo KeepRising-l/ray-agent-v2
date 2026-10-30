@@ -2,6 +2,16 @@
 defineProps({ run: Object, events: Array })
 
 function detail(event) {
+  if (event.type.startsWith('RAG_')) {
+    try {
+      const data = JSON.parse(event.detail)
+      if (event.type === 'RAG_EVIDENCE') return `检索候选 ${data.citations.length} 个片段`
+      if (event.type === 'RAG_DECISION') return data.answerable ? '资料依据足够' : '资料依据不足'
+      if (event.type === 'RAG_VALIDATED') return `实际引用 ${data.sourceIds.join('、')}`
+      if (event.type === 'RAG_CONTEXT_SELECTED') return `${data.modelCalls}次生成累计输入估算 ${data.estimatedInputTotal}`
+      return data.reason || ''
+    } catch { return '' }
+  }
   if (!event.type.startsWith('TOOL_') && !event.type.startsWith('MODEL_')) return event.detail
   try {
     const data = JSON.parse(event.detail)
