@@ -23,7 +23,7 @@ const reasons = {
       <p v-if="call.status === 'WAITING_USER'">等待你的补充，工作线程已释放。</p>
       <p v-else-if="call.status !== 'RUNNING'">{{ call.status === 'SUCCEEDED' ? '执行完成' : call.status === 'INTERRUPTED' ? '运行已结束' : (reasons[call.code] || '工具执行失败') }} · {{ call.durationMs || 0 }} ms</p>
       <ul v-if="call.sources.length">
-        <li v-for="source in call.sources" :key="source.id + source.kind">
+        <li v-for="source in call.sources" :key="source.id + source.kind" :data-web-source="source.id" tabindex="-1">
           <a :href="source.url" target="_blank" rel="noopener noreferrer">[{{ source.id }}] {{ source.title || source.url }}</a>
           <small> · {{ source.kind === 'FETCH' ? '已抓取正文' : '搜索摘要' }}</small>
         </li>

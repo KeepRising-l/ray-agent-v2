@@ -1,6 +1,8 @@
 <script setup>
 import { onMounted, onUnmounted, ref } from 'vue'
 import { knowledgeRequest as api, documentStates, isProcessing } from '../api/knowledge.js'
+import { requestJson } from '../api/http.js'
+import DocumentStatusList from '../components/DocumentStatusList.vue'
 
 const bases = ref([])
 const kb = ref('')
@@ -11,6 +13,7 @@ const versions = ref([])
 const versionId = ref('')
 const detail = ref(null)
 const chunks = ref([])
+const attempts = ref([])
 const file = ref(null)
 const input = ref(null)
 const busy = ref(false)
@@ -22,6 +25,7 @@ let disposed = false
 let refreshing = false
 let selection = 0
 let refreshSequence = 0
+let versionSequence = 0
 
 function docPath(doc = selectedDocument.value?.id) {
   return `/${kb.value}/documents/${doc}`
@@ -32,11 +36,20 @@ async function loadVersion() {
   const selectedBase = kb.value
   const selectedDoc = selectedDocument.value.id
   const selectedVersion = versionId.value
+  const token = ++versionSequence
   const path = `${docPath()}/versions/${versionId.value}`
-  const [version, content] = await Promise.all([api(path), api(path + '/chunks')])
-  if (disposed || selectedBase !== kb.value || selectedDoc !== selectedDocument.value?.id || selectedVersion !== versionId.value) return
-  detail.value = version
-  chunks.value = content
+  if (detail.value?.version.id !== selectedVersion) {
+    detail.value = null; chunks.value = []; attempts.value = []
+  }
+  try {
+    const [version, content, history] = await Promise.all([api(path), api(path + '/chunks'), requestJson('/api/tasks/documents/' + selectedVersion + '/attempts')])
+    if (disposed || token !== versionSequence || selectedBase !== kb.value || selectedDoc !== selectedDocument.value?.id || selectedVersion !== versionId.value) return
+    detail.value = version
+    chunks.value = content
+    attempts.value = history
+  } catch (error) {
+    if (!disposed && selectedBase === kb.value && selectedDoc === selectedDocument.value?.id && selectedVersion === versionId.value) status.value = error.message
+  }
 }
 
 async function selectDocument(doc) {
@@ -44,11 +57,14 @@ async function selectDocument(doc) {
   selectedDocument.value = doc
   detail.value = null
   chunks.value = []
-  const result = await api(docPath(doc.id) + '/versions')
-  if (disposed || token !== selection) return
-  versions.value = result
-  versionId.value = versions.value[0]?.id || ''
-  await loadVersion()
+  attempts.value = []
+  try {
+    const result = await api(docPath(doc.id) + '/versions')
+    if (disposed || token !== selection) return
+    versions.value = result
+    versionId.value = versions.value[0]?.id || ''
+    await loadVersion()
+  } catch (error) { if (!disposed && token === selection) status.value = error.message }
 }
 
 async function refresh(force = false) {
@@ -74,6 +90,9 @@ async function refresh(force = false) {
         if (disposed || currentBase !== kb.value || token !== refreshSequence || selected.id !== selectedDocument.value?.id) return
         versions.value = next
         await loadVersion()
+      } else {
+        selectedDocument.value = null; versions.value = []; chunks.value = []; detail.value = null; attempts.value = []
+        status.value = '该文档已删除或当前不可访问。'
       }
     }
   } finally {
@@ -90,12 +109,15 @@ async function selectBase() {
   versions.value = []
   detail.value = null
   chunks.value = []
+  attempts.value = []
   documents.value = []
   localStorage.setItem('ray-kb', kb.value)
   const selectedBase = kb.value
   if (selectedBase) {
-    const result = await api(`/${selectedBase}/documents`)
-    if (!disposed && kb.value === selectedBase) documents.value = result
+    try {
+      const result = await api(`/${selectedBase}/documents`)
+      if (!disposed && kb.value === selectedBase) documents.value = result
+    } catch (error) { if (!disposed && kb.value === selectedBase) status.value = error.message }
   }
 }
 
@@ -107,6 +129,7 @@ async function createBase() {
     kb.value = created.id
     name.value = ''
     await selectBase()
+    if (disposed) return
     status.value = '知识库已建立'
   } catch (error) { status.value = error.message } finally { busy.value = false }
 }
@@ -164,6 +187,7 @@ async function removeDocument() {
     selectedDocument.value = null
     detail.value = null
     chunks.value = []
+  attempts.value = []
     versions.value = []
     status.value = '文档和索引已删除，原文件清理失败时会由后台重试'
     await refresh(true)
@@ -177,7 +201,7 @@ onMounted(async () => {
     kb.value = bases.value.find(base => base.id === localStorage.getItem('ray-kb'))?.id || bases.value[0]?.id || ''
     await selectBase()
     poll = setInterval(async () => {
-      if (!busy.value && documents.value.some(doc => isProcessing(doc.status))) {
+      if (!busy.value && kb.value) {
         try { await refresh() } catch { status.value = '无法更新文档状态，请检查后端' }
       }
     }, 1000)
@@ -212,13 +236,7 @@ onUnmounted(() => {
       <button v-if="selectedDocument" type="button" :disabled="busy || !file" @click="upload(true)">作为选中文档的新版本</button>
     </form>
     <p role="status">{{ status }}</p>
-    <ul aria-label="文档列表">
-      <li v-for="doc in documents" :key="doc.id">
-        <button :disabled="busy" @click="selectDocument(doc)">{{ doc.name }}</button>
-        <span> · v{{ doc.latestVersion }} · {{ documentStates[doc.status] }} · {{ doc.chunkCount }} 个片段</span>
-        <p v-if="doc.errorMessage">{{ doc.errorMessage }}</p>
-      </li>
-    </ul>
+    <DocumentStatusList :documents="documents" :busy="busy" :selected="selectedDocument?.id" @select="selectDocument" />
     <section v-if="detail" aria-label="文档版本详情">
       <h3>{{ selectedDocument.name }}</h3>
       <button :disabled="busy || isProcessing(selectedDocument.status)" @click="reindex">重建索引</button>
@@ -238,6 +256,9 @@ onUnmounted(() => {
         <p>解析版本：{{ detail.version.parserVersion }}</p>
         <p>分块策略：{{ detail.version.chunkPolicy }}</p>
         <p>向量空间：{{ detail.version.embeddingProfile || '尚未写入' }}</p>
+      </details>
+      <details v-if="attempts.length"><summary>处理尝试 · {{ attempts.length }} 次</summary>
+        <ol><li v-for="attempt in attempts" :key="attempt.attempt">#{{ attempt.attempt }} · {{ attempt.stage }} · {{ attempt.status }} {{ attempt.error_code || '' }}</li></ol>
       </details>
       <h4>片段与来源定位</h4>
       <details v-for="chunk in chunks" :key="chunk.id" class="chunk-preview">

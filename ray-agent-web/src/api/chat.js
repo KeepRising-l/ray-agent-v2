@@ -1,3 +1,5 @@
+import { RequestError } from './http.js'
+
 /** 发送一条消息，逐段读取后端的 text、done、error 事件。 */
 export async function streamChat(message, signal, onText, channelId, options = {}) {
   const resume = options.resume
@@ -10,9 +12,10 @@ export async function streamChat(message, signal, onText, channelId, options = {
   })
 
   if (!response.ok) {
-    if (response.status === 429) throw new Error('运行容量已满，请等待或取消现有运行后重试。')
+    const payload = await response.json().catch(() => ({}))
+    if (response.status === 429) throw new RequestError('运行容量已满，请等待或取消现有运行后重试。', 429)
     const hint = response.status === 409 ? '当前会话已有运行或请求重复，请查看运行记录。' : `请求失败（HTTP ${response.status}）。`
-    throw new Error(response.status === 503 ? '模型尚未配置，请先配置后端。' : hint)
+    throw new RequestError(response.status === 503 ? '模型尚未配置，请先配置后端。' : payload.message || hint, response.status, payload)
   }
   if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) {
     throw new Error('服务没有返回有效的流式响应。')
@@ -45,10 +48,11 @@ export async function streamChat(message, signal, onText, channelId, options = {
       reason = 'WAITING_USER'
     }
     if (name === 'text' && typeof payload.text === 'string') onText(payload.text)
-    if (name === 'error') throw new Error(payload.message || '模型调用失败。')
+    if (name === 'error') throw new RequestError(payload.message || '模型调用失败。', 0, payload)
     if (name === 'done') {
       finished = true
       reason = payload.reason
+      options.onDone?.(payload)
     }
   }
 

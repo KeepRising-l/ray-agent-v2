@@ -53,3 +53,5 @@ SSE先发meta和queue/QUEUED，取得槽后发queue/RUNNING。排队默认30秒�
 报告在忽略的`logs/r08-mock.json`、`logs/r08-live.json`，截图`logs/r08-browser.png`。脚本只清理自己的schema、进程和`.ray-data/r08-check-*`。WSL最初停止导致连接拒绝，启动并保持WSL实例后PG测试通过。SQL新增V008，仍由Spring显式初始化，未引入Flyway、Redis或MQ。
 
 登录、部署、任意位置恢复与用户代码学习留待后续；R08实现和验证不代表用户已掌握源码。
+
+2026-10-31后续补验：用户在R09期间另行提供新的本机Embedding配置，真实HTTP200返回BAAI/bge-m3的1024维；`python tools/verify_r08.py --live --browser`完整通过真实模型、Embedding、PG与浏览器路径，含受控503和中断重试。新证据为logs/r08-live.json的realEmbedding=true；前述401是当时配置状态的记录。

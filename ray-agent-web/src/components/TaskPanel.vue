@@ -5,6 +5,8 @@ const tasks = ref([])
 const capacity = ref(null)
 const message = ref('')
 const attempts = ref([])
+const pending = ref(false)
+let inspection = 0
 let timer
 let disposed = false
 let refreshing = false
@@ -24,19 +26,27 @@ async function refresh() {
   finally { refreshing = false }
 }
 async function cancel(task) {
+  if (pending.value) return
+  pending.value = true
   try { await api(`/api/runs/${task.id}/cancel`, 'POST'); message.value = '已请求取消'; await refresh() }
   catch (error) { message.value = error.message }
+  finally { pending.value = false }
 }
 async function retry(task) {
+  if (pending.value) return
+  pending.value = true
   try {
     await api(`/api/knowledge-bases/${task.kbId}/documents/${task.documentId}/versions/${task.id}/retry`, 'POST')
     message.value = '已重新排入文档处理队列'
     await refresh()
   } catch (error) { message.value = error.message }
+  finally { pending.value = false }
 }
 async function inspect(task) {
-  try { attempts.value = await api(`/api/tasks/documents/${task.id}/attempts`) }
-  catch (error) { message.value = error.message }
+  const token = ++inspection
+  attempts.value = []
+  try { const result = await api(`/api/tasks/documents/${task.id}/attempts`); if (!disposed && token === inspection) attempts.value = result }
+  catch (error) { if (!disposed && token === inspection) message.value = error.message }
 }
 onMounted(() => { refresh(); timer = setInterval(refresh, 1500) })
 onUnmounted(() => { disposed = true; clearInterval(timer) })
@@ -55,8 +65,8 @@ onUnmounted(() => { disposed = true; clearInterval(timer) })
       <p v-else>尝试 {{ task.attempt }} 次 · 阶段 {{ task.stage }} · 本轮自动重试 {{ task.retries }} 次 {{ task.code || '' }}</p>
       <p v-if="task.nextAttemptAt">计划重试：{{ new Date(task.nextAttemptAt).toLocaleString() }}</p>
       <button v-if="task.sessionId" @click="emit('open-session', task.sessionId)">{{ task.status === 'WAITING_USER' ? '回到会话补充' : '查看会话' }}</button>
-      <button v-if="task.kind === 'RUN' && ['QUEUED', 'RUNNING', 'WAITING_USER'].includes(task.status)" @click="cancel(task)">取消运行</button>
-      <button v-if="task.recovery === 'RETRY_DOCUMENT'" @click="retry(task)">重试文档</button>
+      <button v-if="task.kind === 'RUN' && ['QUEUED', 'RUNNING', 'WAITING_USER'].includes(task.status)" :disabled="pending" @click="cancel(task)">取消运行</button>
+      <button v-if="task.recovery === 'RETRY_DOCUMENT'" :disabled="pending" @click="retry(task)">重试文档</button>
       <button v-if="task.kind === 'DOCUMENT'" @click="inspect(task)">查看尝试记录</button>
       <p v-if="task.kind === 'RUN' && task.status === 'INTERRUPTED'">进程中断；可查看历史后重新提问，本次运行不会自动重放。</p>
     </article>
