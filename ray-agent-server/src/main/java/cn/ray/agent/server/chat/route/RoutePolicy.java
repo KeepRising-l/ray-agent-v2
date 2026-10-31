@@ -23,6 +23,9 @@ public class RoutePolicy {
         if (denyKnowledge) {
             return Optional.of(new RouteDecision(web ? WEB : DIRECT, "RULE", "KNOWLEDGE_DISABLED_BY_USER"));
         }
+        if (!knowledge && !web && value.matches("(?s)(直接解释|直接回答|只用常识).+")) {
+            return Optional.of(new RouteDecision(DIRECT, "RULE", "DIRECT_REQUEST"));
+        }
         if (knowledge) {
             return Optional.of(guard(new RouteDecision(web ? HYBRID : KNOWLEDGE, "RULE", "EXPLICIT_SCOPE"), hasScope));
         }

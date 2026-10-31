@@ -35,9 +35,14 @@ public class AutoChatWorkflow implements ChatWorkflow {
             var decision = router.decide(execution, !scope.knowledgeBaseIds().isEmpty());
             trace.decision(execution, decision);
             switch (decision.target()) {
-                case CLARIFY -> execution.text(decision.reason().equals("NO_KNOWLEDGE_SCOPE")
-                        ? "这个问题需要你的资料。请先选择知识库并新建 AUTO 会话，再说明要查阅或比较什么。"
-                        : "请明确一下：你希望我直接解释、查询所选知识库、搜索网页，还是比较资料与网页？本次尚未检索或联网。");
+                case CLARIFY -> {
+                    if (decision.reason().equals("NO_KNOWLEDGE_SCOPE")) {
+                        execution.text("这个问题需要你的资料。请先选择知识库并新建 AUTO 会话，再说明要查阅或比较什么。");
+                    } else {
+                        throw new cn.ray.agent.runtime.agent.UserQuestionRequired(new cn.ray.agent.runtime.agent.UserQuestionRequired.Continuation(
+                                "AUTO_ROUTE", "请明确：你希望直接解释、查询所选知识库、搜索网页，还是比较资料与网页？", request, null));
+                    }
+                }
                 case HYBRID -> {
                     if (execution.remainingModelCalls() < 1) {
                         execution.text("意图已识别，但剩余模型调用预算不足，尚未检索或联网，请调整预算后重试。");
@@ -58,7 +63,7 @@ public class AutoChatWorkflow implements ChatWorkflow {
                             budget.toolTimeoutMs(), budget.inputTokens());
                     var attemptedWeb = new AtomicBoolean();
                     var childEvents = new Events(event -> {
-                        if (event.type().equals("TOOL_STARTED")) {
+                        if (event.type().equals("TOOL_STARTED") && java.util.Set.of("web_search", "web_fetch").contains(event.name())) {
                             attemptedWeb.set(true);
                         }
                         events.tools().accept(event);

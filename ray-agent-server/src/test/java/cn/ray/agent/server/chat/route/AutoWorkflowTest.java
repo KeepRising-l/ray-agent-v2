@@ -82,6 +82,7 @@ class AutoWorkflowTest {
         assertEquals(RouteDecision.Target.KNOWLEDGE, policy.rule("我的资料是啥，不要联网搜索最新消息", true).orElseThrow().target());
         assertEquals(RouteDecision.Target.WEB, policy.rule("不要读取知识库，请搜索网页", true).orElseThrow().target());
         assertEquals(RouteDecision.Target.DIRECT, policy.rule("不要联网，解释Java", true).orElseThrow().target());
+        assertEquals(RouteDecision.Target.DIRECT, policy.rule("直接解释Java接口，只用常识。", true).orElseThrow().target());
         assertThrows(org.springframework.web.server.ResponseStatusException.class, () -> ChatMode.parse("INVALID"));
     }
 
@@ -126,9 +127,9 @@ class AutoWorkflowTest {
         }))) {
             events.clear();
             var probe = ask(model, "它呢？", scope, budget);
-            assertNull(probe.error);
+            assertInstanceOf(UserQuestionRequired.class, probe.error);
             assertEquals("CLARIFY", target());
-            assertTrue(probe.text.toString().contains("本次尚未检索或联网"));
+            assertTrue(((UserQuestionRequired) probe.error).continuation().question().contains("请明确"));
         }
         verifyNoInteractions(answers);
         assertTrue(toolEvents.stream().noneMatch(event -> event.type().startsWith("TOOL_")));
@@ -306,6 +307,25 @@ class AutoWorkflowTest {
         var probe = ask(model("我已经搜索了最新结果。"), "请搜索网上最新方案", scope, budget);
         assertInstanceOf(GroundedAnswerService.Failure.class, probe.error);
         assertEquals("WEB_NOT_EXECUTED", ((GroundedAnswerService.Failure) probe.error).code());
+    }
+
+    @Test
+    void routeResumeMakesSupplementTheLatestUserMessageInsteadOfConcatenatingAmbiguity() throws Exception {
+        var dispatcher=mock(ModeDispatcher.class);
+        when(dispatcher.bind(any(),any(),any(),any(),any())).thenReturn(request -> {
+            var messages=request.messages();
+            assertEquals("直接解释Java接口，只用常识。",messages.get(messages.size()-1).content());
+            assertEquals(Message.Role.ASSISTANT,messages.get(messages.size()-2).role());
+            assertTrue(messages.get(0).content().contains("那个方案"));
+            return model("Java接口定义行为契约。").generate(request);
+        });
+        var original=input("那个方案如何，请先问清需求");
+        var continuation=new UserQuestionRequired.Continuation("AUTO_ROUTE","你希望做什么？",original,null);
+        var snapshot=new cn.ray.agent.server.run.PendingQuestionStore.Snapshot(1,continuation,budget,1,10,100,new TokenUsage(3,2),"");
+        var accepted=new cn.ray.agent.server.run.PendingQuestionStore.Accepted(snapshot,"直接解释Java接口，只用常识。");
+        var resume=new cn.ray.agent.server.run.RunResumeService(runner,agent,dispatcher);
+        var probe=new Probe();resume.bind(model(),accepted,ChatMode.AUTO,scope,sinks).generate(original).subscribe(probe);
+        probe.done.get(3,TimeUnit.SECONDS);assertNull(probe.error);assertTrue(probe.text.toString().contains("接口"));
     }
 
     static class Probe implements Flow.Subscriber<StreamChunk> {

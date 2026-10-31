@@ -14,14 +14,12 @@ import java.sql.Connection;
 @Component
 public class RunStateService implements ApplicationRunner {
     private final DataSource source;
-    private final ConversationRepository store;
-    private final DocumentRepository documents;
+    private final cn.ray.agent.server.task.InterruptedRunRecovery recovery;
     private Connection lease;
 
-    public RunStateService(DataSource source, ConversationRepository store, DocumentRepository documents) {
+    public RunStateService(DataSource source,cn.ray.agent.server.task.InterruptedRunRecovery recovery) {
         this.source = source;
-        this.store = store;
-        this.documents = documents;
+        this.recovery=recovery;
     }
 
     @Override
@@ -34,8 +32,7 @@ public class RunStateService implements ApplicationRunner {
                 throw new IllegalStateException("当前数据库已有 RayAgent 实例，请停止旧实例或使用独立数据库");
             }
         }
-        store.recover();
-        documents.recover();
+        recovery.recover();
     }
 
     @PreDestroy

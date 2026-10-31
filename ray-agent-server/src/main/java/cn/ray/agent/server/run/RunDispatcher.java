@@ -8,5 +8,7 @@ import java.util.concurrent.Flow;
 
 /** 运行执行入口；当前直接订阅，后续入队时可以更换实现。 */
 public interface RunDispatcher {
-    RunHandle dispatch(LlmAdapter adapter, GenerateRequest request, Flow.Subscriber<StreamChunk> subscriber);
+    RunHandle dispatch(Context context,LlmAdapter adapter, GenerateRequest request, Flow.Subscriber<StreamChunk> subscriber);
+
+    record Context(String ownerId,String runId,BoundedRunExecutor.Permit permit,Runnable started) { }
 }

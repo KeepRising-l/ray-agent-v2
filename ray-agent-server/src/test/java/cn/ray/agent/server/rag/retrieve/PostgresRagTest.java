@@ -45,7 +45,7 @@ class PostgresRagTest {
         admin.execute("CREATE SCHEMA " + schema);
         var source = new DriverManagerDataSource(System.getenv("RAY_TEST_DB_URL") + "?currentSchema=" + schema, System.getenv("RAY_TEST_DB_USER"), System.getenv("RAY_TEST_DB_PASSWORD"));
         new ResourceDatabasePopulator(new ClassPathResource("schema.sql"), new ClassPathResource("db/migration/V004__knowledge_document.sql"),
-                new ClassPathResource("db/migration/V005__document_chunk_vector.sql"), new ClassPathResource("db/migration/V006__knowledge_chat_lifecycle.sql")).execute(source);
+                new ClassPathResource("db/migration/V005__document_chunk_vector.sql"), new ClassPathResource("db/migration/V006__knowledge_chat_lifecycle.sql"),new ClassPathResource("db/migration/V008__run_queue_and_document_attempts.sql")).execute(source);
         jdbc = new JdbcTemplate(source);
         var manager = new DataSourceTransactionManager(source);
         vectors = new PgVectorStore(jdbc);

@@ -2,6 +2,13 @@
 defineProps({ run: Object, events: Array })
 
 function detail(event) {
+  if (event.type.startsWith('COMPACTION_') || event.type.startsWith('RUN_') || event.type === 'CONTEXT_PROJECTED') {
+    try {
+      const data = JSON.parse(event.detail)
+      return data.beforeTokens != null ? `本地估算 ${data.beforeTokens} → ${data.afterTokens} · ${data.reason}`
+        : data.estimatedInputTotal != null ? `累计输入估算 ${data.estimatedInputTotal}` : data.reason || ''
+    } catch { return '' }
+  }
   if (event.type.startsWith('ROUTE_') || event.type.startsWith('HYBRID_')) {
     try {
       const data = JSON.parse(event.detail)
@@ -31,6 +38,7 @@ function detail(event) {
 <template>
   <section v-if="run" aria-label="运行记录">
     <h2>本次运行</h2>
+    <p v-if="run.status === 'QUEUED'">已接收并排队，尚未执行模型。</p>
     <p>状态：{{ run.status }} · 渠道：{{ run.channelId }}</p>
     <p>输入估算：{{ run.estimatedInput ?? '未知' }}（本地估算）</p>
     <p>供应商用量：输入 {{ run.inputTokens ?? '未提供' }} / 输出 {{ run.outputTokens ?? '未提供' }}</p>

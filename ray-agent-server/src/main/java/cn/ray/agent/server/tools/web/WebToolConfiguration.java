@@ -17,6 +17,7 @@ public class WebToolConfiguration {
         var policy = AllowedUrlPolicy.configured(dnsMode);
         var transport = new PublicWebTransport(policy);
         registry.register(new WebFetchTool(transport, policy, new WebContentExtractor()));
+        registry.register(new cn.ray.agent.server.tools.AskUserTool());
         // 未配置时也保留搜索定义，执行返回明确的 NOT_CONFIGURED，避免模型假装已经搜索。
         registry.register(new WebSearchTool(key, transport, policy));
         return registry;

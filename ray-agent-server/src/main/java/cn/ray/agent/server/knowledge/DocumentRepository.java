@@ -123,14 +123,19 @@ public class DocumentRepository {
     }
 
     /** 单个后台消费者领取一项任务；事务到这里结束，解析和外部 Embedding 不占数据库事务。 */
-    public Work claim() {
+    public Work claim() {return claim(null);}
+
+    public Work claim(String targetProfile) {
         return tx.execute(status -> {
-            var rows = jdbc.query("SELECT v.* FROM ra_document_version v WHERE status='UPLOADED' ORDER BY created_at,id LIMIT 1 FOR UPDATE SKIP LOCKED", versionMapper);
+            var rows = jdbc.query("SELECT v.* FROM ra_document_version v JOIN ra_document d ON d.id=v.document_id WHERE v.status='UPLOADED' AND d.deleted_at IS NULL AND d.latest_version=v.version ORDER BY v.created_at,v.id LIMIT 1 FOR UPDATE OF v SKIP LOCKED", versionMapper);
             if (rows.isEmpty()) {
                 return null;
             }
             Version version = rows.get(0);
             stage(version.id(), "UPLOADED", "PARSING");
+            jdbc.update("UPDATE ra_document_version SET target_profile=COALESCE(target_profile,?) WHERE id=?",targetProfile,version.id());
+            cn.ray.agent.server.task.TaskCheckpointStore.begin(jdbc,version.id());
+            version=jdbc.queryForObject("SELECT * FROM ra_document_version WHERE id=?",versionMapper,version.id());
             var owner = jdbc.queryForMap("SELECT owner_id,kb_id,name FROM ra_document WHERE id=?", version.documentId());
             String key = jdbc.queryForObject("SELECT storage_key FROM ra_document_version WHERE id=?", String.class, version.id());
             return new Work(version, (String) owner.get("owner_id"), (String) owner.get("kb_id"), (String) owner.get("name"), key);
@@ -141,6 +146,7 @@ public class DocumentRepository {
         if (jdbc.update("UPDATE ra_document_version SET status=? WHERE id=? AND status=?", next, id, expected) != 1) {
             throw new java.util.concurrent.CancellationException("document state changed");
         }
+        cn.ray.agent.server.task.TaskCheckpointStore.stage(jdbc,id,next);
     }
 
     public void saveChunks(Work work, List<DocumentChunk> result) {
@@ -162,22 +168,43 @@ public class DocumentRepository {
             vectors.write(profile, result, embeddings);
             jdbc.update("UPDATE ra_document_version SET embedding_profile=?,ended_at=?,failure_stage=NULL,error_message=NULL WHERE id=?", profile.id(), System.currentTimeMillis(), work.version().id());
             jdbc.update("UPDATE ra_document SET active_version_id=? WHERE id=?", work.version().id(), work.version().documentId());
+            cn.ray.agent.server.task.TaskCheckpointStore.end(jdbc,work.version().id(),"PUBLISHED","SUCCEEDED",null,false);
         });
     }
 
     public void fail(String id, String stage, String message, boolean interrupted) {
-        jdbc.update("UPDATE ra_document_version SET status=?,failure_stage=?,error_message=?,ended_at=? WHERE id=? AND status IN ('PARSING','CHUNKING','EMBEDDING')",
-                interrupted ? "INTERRUPTED" : "FAILED", stage, message, System.currentTimeMillis(), id);
+        fail(id,stage,message,interrupted,"MANUAL_REVIEW",false);
+    }
+
+    public void fail(String id,String stage,String message,boolean interrupted,String code,boolean retryable) {
+        tx.executeWithoutResult(status -> {
+            int changed=jdbc.update("UPDATE ra_document_version SET status=?,failure_stage=?,error_message=?,ended_at=? WHERE id=? AND status IN ('PARSING','CHUNKING','EMBEDDING')",
+                    interrupted?"INTERRUPTED":"FAILED",stage,message,System.currentTimeMillis(),id);
+            if(changed>0) {cn.ray.agent.server.task.TaskCheckpointStore.end(jdbc,id,stage,interrupted?"INTERRUPTED":"FAILED",code,retryable);}
+        });
     }
 
     public Version retry(String owner, String kb, String doc, String id) {
+        return retry(owner,kb,doc,id,false,0);
+    }
+
+    public Version retryAutomatic(String owner,String kb,String doc,String id,int maxRetries) {
+        return retry(owner,kb,doc,id,true,maxRetries);
+    }
+
+    private Version retry(String owner,String kb,String doc,String id,boolean automatic,int maxRetries) {
         return tx.execute(status -> {
             Version value = version(owner, kb, doc, id);
             jdbc.queryForList("SELECT id FROM ra_document WHERE id=? FOR UPDATE", doc);
             int latest = jdbc.queryForObject("SELECT latest_version FROM ra_document WHERE id=?", Integer.class, doc);
+            requireDocument(owner,kb,doc);
+            if(automatic && jdbc.queryForObject("SELECT COUNT(*) FROM ra_document_retry WHERE version_id=? AND retry_count<? AND next_attempt_at<=?",Integer.class,id,maxRetries,System.currentTimeMillis())!=1) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,"重试计划已失效");
+            }
             if (latest != value.version() || jdbc.update("UPDATE ra_document_version SET status='UPLOADED',error_message=NULL,failure_stage=NULL,ended_at=NULL WHERE id=? AND status IN ('FAILED','INTERRUPTED')", id) != 1) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "只能重试最新的失败或中断版本");
             }
+            jdbc.update("UPDATE ra_document_retry SET retry_count="+(automatic?"retry_count+1":"0")+",next_attempt_at=NULL,reason=? WHERE version_id=?",automatic?"AUTO_RETRY":"MANUAL_RETRY",id);
             return version(owner, kb, doc, id);
         });
     }
@@ -193,6 +220,7 @@ public class DocumentRepository {
     }
 
     public void recover() {
+        jdbc.update("UPDATE ra_ingestion_attempt SET status='INTERRUPTED',retryable=FALSE,error_code='PROCESS_RESTART',ended_at=? WHERE status='RUNNING'",System.currentTimeMillis());
         jdbc.update("UPDATE ra_document_version SET failure_stage=status,status='INTERRUPTED',error_message='服务重启，文档处理已中断，请手动重试',ended_at=? WHERE status IN ('PARSING','CHUNKING','EMBEDDING')", System.currentTimeMillis());
     }
 
@@ -205,6 +233,8 @@ public class DocumentRepository {
                 throw missing();
             }
             jdbc.update("UPDATE ra_document SET deleted_at=COALESCE(deleted_at,?),active_version_id=NULL WHERE id=?", System.currentTimeMillis(), doc);
+            jdbc.update("UPDATE ra_ingestion_attempt SET status='CANCELLED',ended_at=? WHERE version_id IN (SELECT id FROM ra_document_version WHERE document_id=?) AND status='RUNNING'",System.currentTimeMillis(),doc);
+            jdbc.update("UPDATE ra_document_retry SET next_attempt_at=NULL,reason='DELETED' WHERE version_id IN (SELECT id FROM ra_document_version WHERE document_id=?)",doc);
             jdbc.update("UPDATE ra_document_version SET status='DELETED',ended_at=COALESCE(ended_at,?) WHERE document_id=?", System.currentTimeMillis(), doc);
             jdbc.update("DELETE FROM ra_document_chunk WHERE version_id IN (SELECT id FROM ra_document_version WHERE document_id=?)", doc);
             jdbc.update("INSERT INTO ra_file_cleanup(storage_key) SELECT DISTINCT storage_key FROM ra_document_version WHERE document_id=? ON CONFLICT DO NOTHING", doc);

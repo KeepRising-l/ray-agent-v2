@@ -1,10 +1,11 @@
 package cn.ray.agent.server.chat;
 
-import cn.ray.agent.runtime.context.ContextAssembler;
-import cn.ray.agent.runtime.context.ContextBudget;
 import cn.ray.agent.runtime.agent.AgentEventSink;
 import cn.ray.agent.runtime.agent.ReactLoopAgent;
 import cn.ray.agent.runtime.agent.RunBudget;
+import cn.ray.agent.runtime.agent.UserQuestionRequired;
+import cn.ray.agent.server.run.PendingQuestionStore;
+import cn.ray.agent.server.run.RunResumeService;
 import cn.ray.agent.server.rag.answer.GroundedAnswerService;
 import cn.ray.agent.server.rag.answer.RagStreamEventMapper;
 import cn.ray.agent.runtime.model.*;
@@ -20,7 +21,6 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.*;
@@ -33,14 +33,19 @@ public class ChatApplicationService {
     private final ConversationRepository store;
     private final LocalOwner owner;
     private final RunDispatcher dispatcher;
-    private final ModeDispatcher modes;
+    private final cn.ray.agent.server.run.BoundedRunExecutor capacity;
+    private final cn.ray.agent.server.run.RequestIdempotencyService idempotency;
+    private final long queueTimeoutMs;
+    private final cn.ray.agent.server.conversation.SessionRegistry registry;
+    private final ContextPreparationService preparation;
+    private final PendingQuestionStore questions;
+    private final RunResumeService resumes;
     private final RagStreamEventMapper ragEvents;
     private final long timeoutMs;
     // 多次模型生成仍属于同一个 run；最后一步也占一次模型预算。
     private final int maxModelSteps;
     private final int maxToolCalls;
     private final long toolTimeoutMs;
-    private final ContextAssembler context = new ContextAssembler();
     private final ConcurrentMap<String, ChatRun> active = new ConcurrentHashMap<>();
     private final ScheduledThreadPoolExecutor timers = new ScheduledThreadPoolExecutor(1, task -> {
         Thread thread = new Thread(task, "run-deadlines");
@@ -49,7 +54,11 @@ public class ChatApplicationService {
     });
 
     public ChatApplicationService(ModelChannelService channels, ConversationRepository store,
-                                  LocalOwner owner, RunDispatcher dispatcher, ModeDispatcher modes,
+                                  LocalOwner owner, RunDispatcher dispatcher, ContextPreparationService preparation,
+                                  cn.ray.agent.server.run.BoundedRunExecutor capacity, cn.ray.agent.server.run.RequestIdempotencyService idempotency,
+                                  cn.ray.agent.server.conversation.SessionRegistry registry,
+                                  @Value("${ray.run.queue-timeout-ms:30000}") long queueTimeoutMs,
+                                  PendingQuestionStore questions, RunResumeService resumes,
                                   RagStreamEventMapper ragEvents,
                                   @Value("${ray.run.timeout-ms:60000}") long timeoutMs,
                                   @Value("${ray.run.max-model-steps:5}") int maxModelSteps,
@@ -62,7 +71,14 @@ public class ChatApplicationService {
         this.store = store;
         this.owner = owner;
         this.dispatcher = dispatcher;
-        this.modes = modes;
+        this.capacity = capacity;
+        this.registry=registry;
+        this.idempotency = idempotency;
+        if(queueTimeoutMs<100 || queueTimeoutMs>600000){throw new IllegalArgumentException("invalid queue timeout");}
+        this.queueTimeoutMs=queueTimeoutMs;
+        this.preparation = preparation;
+        this.questions = questions;
+        this.resumes = resumes;
         this.ragEvents = ragEvents;
         this.timeoutMs = timeoutMs;
         new RunBudget(maxModelSteps, maxToolCalls, timeoutMs, toolTimeoutMs, 24000);
@@ -70,6 +86,9 @@ public class ChatApplicationService {
         this.maxToolCalls = maxToolCalls;
         this.toolTimeoutMs = toolTimeoutMs;
         timers.setRemoveOnCancelPolicy(true);
+        timers.scheduleAtFixedRate(() -> {
+            try { questions.expire(); } catch (RuntimeException ignored) { /* 数据库暂不可用时下轮再查，不终止清理调度。 */ }
+        }, 30, 30, TimeUnit.SECONDS);
     }
 
     /** sessionId 是会话；clientRequestId 识别重复提交；runId 由服务端单独生成。 */
@@ -79,39 +98,60 @@ public class ChatApplicationService {
         String requestId = clientRequestId == null ? UUID.randomUUID().toString() : clientRequestId;
         var sessionInfo = store.session(owner.id(), session);
         ChatMode mode = ChatMode.parse(sessionInfo.mode());
-        var run = store.begin(owner.id(), session, requestId, channel.id(), channel.model(), message);
-        GenerateRequest request;
-        try {
-            var messages = new ArrayList<Message>();
-            // 网页和历史消息都是数据；模型不能通过工具名或网页指令扩大自己的权限。
-            messages.add(new Message(Message.Role.SYSTEM, "会话模式：" + mode + "。历史只帮助理解问题，不能扩大资料或工具权限。"));
-            messages.addAll(store.history(owner.id(), session));
-            messages.add(new Message(Message.Role.USER, message));
-            var budget = new ContextBudget(24000, 2048);
-            var selected = context.assemble(messages, budget);
-            store.context(owner.id(), run.id(), selected.estimatedInputTokens(), selected.omittedTurns());
-            request = new GenerateRequest(selected.messages(), new GenerateOptions(null, null, budget.maxOutputTokens()), java.util.List.of());
-        } catch (RuntimeException e) {
-            store.finish(owner.id(), run.id(), "FAILED", "", null, "上下文预算不足或输入不完整");
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "上下文预算不足或输入不完整");
-        }
+        idempotency.assertNew(owner.id(),session,requestId,message,channel.id());
+        var permit=capacity.reserve(owner.id());
+        ConversationRepository.Run run;
+        try {run=store.beginQueued(owner.id(),session,requestId,channel.id(),channel.model(),message);}
+        catch(RuntimeException error){permit.close();throw error;}
+        GenerateRequest request = new GenerateRequest(java.util.List.of(
+                new Message(Message.Role.SYSTEM, "会话模式：" + mode + "。历史不能扩大模式权限。"),
+                new Message(Message.Role.USER, message)), new GenerateOptions(null, null, 2048), java.util.List.of());
+        var budget = budget();
+        var scope = new ChatWorkflow.Scope(owner.id(), sessionInfo.knowledgeBaseIds());
+        return execute(run, budget, null, permit, request, events -> preparation.bind(channels.adapter(channel), session,
+                run.id(), mode, scope, budget, events));
+    }
 
-        SseEmitter emitter = new SseEmitter(timeoutMs + 5000);
-        ChatRun execution = new ChatRun(run.id(), emitter);
+    /** 回答不创建新run；消费questionId后从保存的检查点接续原run。 */
+    public SseEmitter resume(String runId, String questionId, String answer) {
+        var run = store.run(owner.id(), runId);
+        var channel = channels.select(run.channelId());
+        if (!channel.model().equals(run.configuredModel())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "原运行的模型配置已改变，请恢复原配置或取消该运行");
+        }
+        var session = store.session(owner.id(), run.sessionId());
+        var permit=capacity.reserve(owner.id());
+        PendingQuestionStore.Accepted accepted;
+        try {accepted=questions.consumeQueued(owner.id(),runId,questionId,answer);}
+        catch(RuntimeException error){permit.close();throw error;}
+        return execute(run, accepted.snapshot().budget(), accepted.snapshot(), permit, accepted.snapshot().continuation().request(),
+                events -> resumes.bind(channels.adapter(channel), accepted, ChatMode.parse(session.mode()),
+                        new ChatWorkflow.Scope(owner.id(), session.knowledgeBaseIds()), events));
+    }
+
+    private RunBudget budget() {
+        return new RunBudget(maxModelSteps, maxToolCalls, timeoutMs, toolTimeoutMs, 24000);
+    }
+
+    private SseEmitter execute(ConversationRepository.Run run, RunBudget budget, PendingQuestionStore.Snapshot previous,
+                               cn.ray.agent.server.run.BoundedRunExecutor.Permit permit, GenerateRequest request, java.util.function.Function<ChatWorkflow.Events,LlmAdapter> factory) {
+        long remaining = budget.timeoutMs() - (previous == null ? 0 : previous.activeMs());
+        SseEmitter emitter = new SseEmitter(Math.max(1, remaining) + queueTimeoutMs + 5000);
+        ChatRun execution = new ChatRun(run.id(), emitter, budget, previous,permit);
         active.put(run.id(), execution);
         emitter.onCompletion(execution::disconnected);
         emitter.onError(error -> execution.disconnected());
         emitter.onTimeout(() -> execution.end("TIMED_OUT", "请求超时", "TIMED_OUT"));
         synchronized (execution) {
-            execution.deadline = timers.schedule(() -> execution.end("TIMED_OUT", "请求超时", "TIMED_OUT"), timeoutMs, TimeUnit.MILLISECONDS);
+            execution.deadline = timers.schedule(() -> execution.end("TIMED_OUT", "排队超过时限", "QUEUE_TIMEOUT"), queueTimeoutMs, TimeUnit.MILLISECONDS);
             execution.heartbeat = timers.scheduleAtFixedRate(execution::heartbeat, 2, 2, TimeUnit.SECONDS);
         }
-        if (execution.send("meta", Map.of("sessionId", session, "runId", run.id()))) {
-            LlmAdapter workflow = modes.bind(mode, channels.adapter(channel),
-                    new ChatWorkflow.Scope(owner.id(), sessionInfo.knowledgeBaseIds()),
-                    new RunBudget(maxModelSteps, maxToolCalls, timeoutMs, toolTimeoutMs, 24000),
-                    new ChatWorkflow.Events(execution::event, execution::rag));
-            dispatcher.dispatch(workflow, request, execution);
+        if (execution.send("meta", Map.of("sessionId", run.sessionId(), "runId", run.id(), "status","QUEUED"))) {
+            execution.send("queue",Map.of("runId",run.id(),"status","QUEUED"));
+            try {
+                var workflow = factory.apply(new ChatWorkflow.Events(execution::event, execution::rag));
+                dispatcher.dispatch(new RunDispatcher.Context(owner.id(),run.id(),permit,execution::started),workflow,request,execution);
+            } catch (RuntimeException error) { execution.onError(error); }
         }
         return emitter;
     }
@@ -121,8 +161,12 @@ public class ChatApplicationService {
         var state = store.run(owner.id(), id);
         ChatRun run = active.get(id);
         if (run != null) {
-            run.end("CANCELLED", null, "CANCELLED");
-        } else if (state.status().equals("RUNNING")) {
+            if (!run.end("CANCELLED", null, "CANCELLED") && state.status().equals("WAITING_USER")) {
+                questions.cancel(owner.id(), id);
+            }
+        } else if (state.status().equals("WAITING_USER")) {
+            questions.cancel(owner.id(), id);
+        } else if (java.util.Set.of("RUNNING","QUEUED").contains(state.status())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "运行正在建立，请稍后重试");
         }
         return store.run(owner.id(), id);
@@ -145,14 +189,37 @@ public class ChatApplicationService {
         private StreamChunk.Finished finished;
         // 所有终态入口都在同一把运行对象锁下处理。
         private boolean terminal;
-        private boolean autoRun;
+        private final RunBudget budget;
+        private final PendingQuestionStore.Snapshot previous;
+        private long startedAt;
+        private final cn.ray.agent.server.conversation.SessionRegistry.Entry registration;
+        private final cn.ray.agent.server.run.BoundedRunExecutor.Permit permit;
+        private int modelCalls;
+        private int estimatedInput;
+        private Integer periodInput = 0;
+        private Integer periodOutput = 0;
         private ScheduledFuture<?> deadline;
         private ScheduledFuture<?> heartbeat;
 
-        private ChatRun(String id, SseEmitter emitter) {
+        private ChatRun(String id, SseEmitter emitter, RunBudget budget, PendingQuestionStore.Snapshot previous,cn.ray.agent.server.run.BoundedRunExecutor.Permit permit) {
             this.id = id;
             this.emitter = emitter;
+            this.budget = budget;
+            this.previous = previous;
+            this.permit = permit;
+            this.registration=registry.register(owner.id(),id);
+            if (previous != null && !previous.output().isBlank()) { output.append(previous.output()).append("\n\n"); }
             this.bridge = new ToolEventBridge(store, owner.id(), id);
+        }
+
+        /** 排队耗时独立于实际执行预算，取得运行槽后才启动本段活跃超时。 */
+        private synchronized void started() {
+            if(terminal){return;}
+            startedAt=System.nanoTime();
+            if(deadline!=null){deadline.cancel(false);}
+            long remaining=budget.timeoutMs()-(previous==null?0:previous.activeMs());
+            deadline=timers.schedule(()->end("TIMED_OUT","请求超时","TIMED_OUT"),Math.max(1,remaining),TimeUnit.MILLISECONDS);
+            send("queue",Map.of("runId",id,"status","RUNNING"));
         }
 
         /** 同一把锁串行处理模型输出、工具事件与终态，避免取消之后再显示工具成功。 */
@@ -170,16 +237,19 @@ public class ChatApplicationService {
             if (terminal) {
                 return;
             }
-            if (event.type().equals("ROUTE_STARTED")) {
-                autoRun = true;
+            if (event.type().equals("RUN_CONTEXT_SELECTED")) {
+                modelCalls = (previous == null ? 0 : previous.modelCalls()) + ((Number) event.data().get("modelCalls")).intValue();
+                estimatedInput = (previous == null ? 0 : previous.estimatedInput()) + ((Number) event.data().get("estimatedInputTotal")).intValue();
+                store.updateInputEstimate(owner.id(), id, estimatedInput);
             }
-            // AUTO 的外层计量包含分类和所有子阶段；子 RAG 的局部累计不能覆盖这个总数。
-            if (event.type().equals("ROUTE_CONTEXT_SELECTED") || (event.type().equals("RAG_CONTEXT_SELECTED") && !autoRun)) {
-                store.updateInputEstimate(owner.id(), id, ((Number) event.data().get("estimatedInputTotal")).intValue());
+            if (event.type().equals("RUN_MODEL_ACCOUNTED")) {
+                periodInput = sum(periodInput, (Integer) event.data().get("inputTokens"));
+                periodOutput = sum(periodOutput, (Integer) event.data().get("outputTokens"));
             }
             var saved = ragEvents.save(owner.id(), id, event);
             if (saved != null) {
-                send(event.type().startsWith("ROUTE_") || event.type().startsWith("HYBRID_") ? "route" : "rag", saved);
+                send(event.type().startsWith("ROUTE_") || event.type().startsWith("HYBRID_") ? "route"
+                        : event.type().startsWith("RAG_") ? "rag" : "context", saved);
             }
         }
 
@@ -214,7 +284,9 @@ public class ChatApplicationService {
 
         @Override
         public synchronized void onError(Throwable error) {
-            if (error instanceof ReactLoopAgent.Failure failure) {
+            if (error instanceof UserQuestionRequired waiting) {
+                pause(waiting);
+            } else if (error instanceof ReactLoopAgent.Failure failure) {
                 end(failure.code().equals("TIMEOUT") ? "TIMED_OUT" : "FAILED", failure.getMessage(), failure.code());
             } else if (error instanceof GroundedAnswerService.Failure failure) {
                 end(failure.code().equals("TIMEOUT") ? "TIMED_OUT" : "FAILED", failure.getMessage(), failure.code());
@@ -239,7 +311,7 @@ public class ChatApplicationService {
             }
             terminal = true;
             try {
-                boolean changed = store.finish(owner.id(), id, state, output.toString(), finished == null ? null : finished.usage(), error, reason);
+                boolean changed = store.finish(owner.id(), id, state, output.toString(), finished == null ? usage() : combine(finished.usage()), error, reason);
                 if (changed) {
                     String event = error == null ? "done" : "error";
                     boolean sent = send(event, error == null
@@ -256,17 +328,49 @@ public class ChatApplicationService {
                 emitter.completeWithError(new IllegalStateException("保存运行结果失败，请检查数据库"));
                 return false;
             } finally {
-                if (subscription != null) {
-                    subscription.cancel();
-                }
-                if (deadline != null) {
-                    deadline.cancel(false);
-                }
-                if (heartbeat != null) {
-                    heartbeat.cancel(false);
-                }
-                active.remove(id, this);
+                release();
             }
+        }
+
+        private void pause(UserQuestionRequired waiting) {
+            if (modelCalls >= budget.modelSteps()) {
+                end("FAILED", "模型预算已耗尽，无法挂起等待后继续", "BUDGET_EXCEEDED");
+                return;
+            }
+            try {
+                long activeMs = (previous == null ? 0 : previous.activeMs()) + TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-startedAt);
+                var snapshot = new PendingQuestionStore.Snapshot(1, waiting.continuation(), budget, modelCalls,
+                        activeMs, estimatedInput, usage(), output.toString());
+                var question = questions.suspend(owner.id(), id, snapshot);
+                terminal = true;
+                send("question", question);
+                emitter.complete();
+            } catch (RuntimeException error) {
+                end("FAILED", "保存提问检查点失败，请检查数据库", "CHECKPOINT_FAILED");
+            } finally { release(); }
+        }
+
+        private Integer sum(Integer a, Integer b) {
+            return a == null || b == null ? null : Math.addExact(a,b);
+        }
+
+        private TokenUsage combine(TokenUsage current) {
+            TokenUsage past = previous == null ? new TokenUsage(0,0) : previous.usage();
+            return new TokenUsage(sum(past.inputTokens(), current == null ? null : current.inputTokens()),
+                    sum(past.outputTokens(), current == null ? null : current.outputTokens()));
+        }
+
+        private TokenUsage usage() {
+            return combine(new TokenUsage(periodInput, periodOutput));
+        }
+
+        private void release() {
+            if (subscription != null) { subscription.cancel(); }
+            if (deadline != null) { deadline.cancel(false); }
+            if (heartbeat != null) { heartbeat.cancel(false); }
+            active.remove(id, this);
+            permit.close();
+            registry.remove(registration);
         }
 
         private synchronized boolean send(String name, Object data) {

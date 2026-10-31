@@ -56,8 +56,14 @@ public final class OpenAiEmbeddingClient implements EmbeddingClient, AutoCloseab
             if (response.body().length > 4_000_000) {
                 throw new Failure("INVALID_RESPONSE", "Embedding 响应过大");
             }
-            var data = mapper.readTree(response.body());
-            if (!data.path("model").asText().equals(profile.model()) || !data.path("data").isArray()
+            com.fasterxml.jackson.databind.JsonNode data;
+            try {
+                data = mapper.readTree(response.body());
+            } catch (java.io.IOException error) {
+                // 响应格式错误不能归入临时网络故障，否则任务层会对坏响应自动重试。
+                throw new Failure("INVALID_RESPONSE", "Embedding 返回的 JSON 无效");
+            }
+            if (data == null || !data.path("model").asText().equals(profile.model()) || !data.path("data").isArray()
                     || data.path("data").size() != texts.size()) {
                 throw new Failure("INVALID_RESPONSE", "Embedding 返回模型或数量与请求不符");
             }

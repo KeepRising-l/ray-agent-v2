@@ -43,3 +43,5 @@ ALTER TABLE ra_event ALTER COLUMN detail TYPE TEXT;
 CREATE INDEX IF NOT EXISTS idx_session_owner ON ra_session(owner_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_run_session ON ra_run(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_message_session ON ra_message(session_id, created_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ra_one_assistant_message ON ra_message(run_id) WHERE role='ASSISTANT';

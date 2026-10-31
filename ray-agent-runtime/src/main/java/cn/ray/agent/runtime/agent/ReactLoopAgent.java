@@ -47,6 +47,28 @@ public final class ReactLoopAgent implements AutoCloseable {
         };
     }
 
+    /** 恢复单独ask_user后的检查点；权限只能取原运行允许名单，不重新运行旧工具。 */
+    public LlmAdapter resume(LlmAdapter model, AgentCheckpoint checkpoint, String answer, AgentEventSink sink) {
+        if (!Set.of("web_search", "web_fetch", "ask_user").containsAll(checkpoint.allowed()) || answer == null || answer.isBlank() || answer.length() > 2000) {
+            throw new IllegalArgumentException("invalid resume input");
+        }
+        return request -> {
+            var once = new java.util.concurrent.atomic.AtomicBoolean();
+            return subscriber -> {
+                Loop loop = new Loop(subscriber, model, checkpoint.initial(), checkpoint.allowed(), checkpoint.budget(), sink);
+                loop.restored = checkpoint;
+                loop.userAnswer = answer;
+                if (!once.compareAndSet(false, true)) {
+                    loop.cancel();
+                    subscriber.onSubscribe(loop);
+                    subscriber.onError(new IllegalStateException("one subscriber per resumed run"));
+                } else {
+                    subscriber.onSubscribe(loop);
+                }
+            };
+        };
+    }
+
     private final class Loop implements Flow.Subscription, Runnable {
         private final Flow.Subscriber<? super StreamChunk> subscriber;
         private final LlmAdapter model;
@@ -69,6 +91,10 @@ public final class ReactLoopAgent implements AutoCloseable {
         private Integer inputUsage = 0;
         private Integer outputUsage = 0;
         private boolean emittedText;
+        private AgentCheckpoint restored;
+        private String userAnswer;
+        private long startedAt;
+        private long elapsedOffset;
 
         private Loop(Flow.Subscriber<? super StreamChunk> subscriber, LlmAdapter model,
                      GenerateRequest initial, Set<String> allowed, RunBudget budget, AgentEventSink sink) {
@@ -95,7 +121,9 @@ public final class ReactLoopAgent implements AutoCloseable {
             notifyAll();
             if (!started) {
                 started = true;
-                endsAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(budget.timeoutMs());
+                startedAt = System.nanoTime();
+                elapsedOffset = restored == null ? 0 : restored.elapsedMs();
+                endsAt = startedAt + TimeUnit.MILLISECONDS.toNanos(budget.timeoutMs() - elapsedOffset);
                 try {
                     workers.execute(this);
                 } catch (RejectedExecutionException e) {
@@ -127,12 +155,20 @@ public final class ReactLoopAgent implements AutoCloseable {
             worker = Thread.currentThread();
             try {
                 cancellation.checkCancelled();
-                List<Message> messages = new ArrayList<>(initial.messages());
+                List<Message> messages = new ArrayList<>(restored == null ? initial.messages() : restored.messages());
+                if (restored != null) {
+                    restored.sources().forEach(source -> sources.put(source.url(), source));
+                    callIds.addAll(restored.callIds());
+                    // 一个USER回答只对应这个挂起的工具调用，保持ASSISTANT调用与TOOL结果配对。
+                    messages.add(new Message(Message.Role.TOOL, mapper.writeValueAsString(Map.of("userAnswer", userAnswer)), List.of(), restored.questionCallId()));
+                    sink.accept(new AgentEventSink.Event("TOOL_SUCCEEDED", restored.modelSteps(), restored.questionCallId(), "ask_user", "USER_ANSWERED", 0, List.of()));
+                    // 历史步骤usage在外层run按暂停前后累计，恢复后的适配器只报告本段新用量。
+                }
                 var definitions = registry.definitions(allowed);
                 int definitionCost = definitions.stream().mapToInt(item -> (item.name() + item.description()
                         + item.parametersSchemaJson()).getBytes(StandardCharsets.UTF_8).length + 16).sum();
-                int calls = 0;
-                for (int step = 1; step <= budget.modelSteps(); step++) {
+                int calls = restored == null ? 0 : restored.toolCalls();
+                for (int step = restored == null ? 1 : restored.modelSteps() + 1; step <= budget.modelSteps(); step++) {
                     remaining();
                     List<Message> selected;
                     try {
@@ -160,6 +196,9 @@ public final class ReactLoopAgent implements AutoCloseable {
                     if (step == budget.modelSteps() || calls + response.toolCalls().size() > budget.toolCalls()) {
                         throw new Failure("BUDGET_EXCEEDED", "模型或工具调用预算已耗尽，请缩小问题范围");
                     }
+                    if (response.toolCalls().stream().anyMatch(call -> call.name().equals("ask_user")) && response.toolCalls().size() != 1) {
+                        throw new Failure("INVALID_QUESTION_BATCH", "提问必须单独调用ask_user，不能与其他工具放在同一批");
+                    }
                     messages = new ArrayList<>(selected);
                     messages.add(response);
                     for (ToolCall call : response.toolCalls()) {
@@ -173,6 +212,16 @@ public final class ReactLoopAgent implements AutoCloseable {
                         ToolResult observation = tools.execute(call, allowed, cancellation,
                                 Math.min(remaining(), budget.toolTimeoutMs()));
                         remaining();
+                        if (call.name().equals("ask_user") && observation.code().equals("WAITING_USER") && observation.success()) {
+                            String question = mapper.readTree(observation.content()).path("question").asText();
+                            long elapsed = elapsedOffset + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+                            var checkpoint = new AgentCheckpoint(1, initial, messages, List.copyOf(sources.values()), callIds,
+                                    allowed, budget, step, calls, elapsed, new TokenUsage(inputUsage, outputUsage), call.id(), question);
+                            sink.accept(new AgentEventSink.Event("TOOL_WAITING_USER", step, call.id(), call.name(), "WAITING_USER", 0, List.of()));
+                            throw new UserQuestionRequired(new UserQuestionRequired.Continuation("AGENT", question, initial, checkpoint));
+                        }
+                        observation = new ToolResult(observation.success(), observation.code(),
+                                new cn.ray.agent.runtime.context.ContextAllocationPolicy().toolText(observation.content()), observation.sources());
                         List<ToolResult.Source> evidence = new ArrayList<>();
                         for (var source : observation.sources()) {
                             var assigned = sources.computeIfAbsent(source.url(), url -> new ToolResult.Source(
@@ -189,7 +238,7 @@ public final class ReactLoopAgent implements AutoCloseable {
             } catch (Exception e) {
                 if (!cancelled && !terminal) {
                     terminal = true;
-                    subscriber.onError(e instanceof Failure ? e : new Failure("MODEL_FAILED", "模型调用失败或返回不完整"));
+                    subscriber.onError(e instanceof Failure || e instanceof UserQuestionRequired ? e : new Failure("MODEL_FAILED", "模型调用失败或返回不完整"));
                 }
             } finally {
                 Flow.Subscription value = upstream;

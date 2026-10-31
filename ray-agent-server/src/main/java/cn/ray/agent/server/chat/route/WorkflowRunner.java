@@ -16,12 +16,18 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /** AUTO 的有界串行编排器。业务步骤不另起线程等待自己，取消同时关闭当前模型/子工作流和工具。 */
 @Component
 public class WorkflowRunner {
-    private final ExecutorService workers = new ThreadPoolExecutor(4, 4, 0, TimeUnit.MILLISECONDS,
-            new ArrayBlockingQueue<>(16), task -> {
-                Thread thread = new Thread(task, "auto-workflow");
-                thread.setDaemon(true);
-                return thread;
-            }, new ThreadPoolExecutor.AbortPolicy());
+    // 根阶段会等待AUTO子阶段，必须使用不同的有界池，避免占满后互相等待。
+    private final ExecutorService workers = pool("auto-workflow");
+    private final ExecutorService rootWorkers = pool("context-workflow");
+
+    private static ExecutorService pool(String name) {
+        return new ThreadPoolExecutor(4, 4, 0, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(16), task -> {
+                    Thread thread = new Thread(task, name);
+                    thread.setDaemon(true);
+                    return thread;
+                }, new ThreadPoolExecutor.AbortPolicy());
+    }
 
     @FunctionalInterface
     public interface Plan {
@@ -29,10 +35,15 @@ public class WorkflowRunner {
     }
 
     public LlmAdapter bind(LlmAdapter model, RunBudget budget, ChatWorkflow.Events events, PlanFactory factory) {
+        return bind(model, budget, events, factory, "ROUTE");
+    }
+
+    /** RUN用于整个请求计量，ROUTE用于AUTO内部轨迹，两层不相互覆盖估算。 */
+    public LlmAdapter bind(LlmAdapter model, RunBudget budget, ChatWorkflow.Events events, PlanFactory factory, String prefix) {
         return request -> {
             var once = new AtomicBoolean();
             return subscriber -> {
-                var session = new Session(model, request, budget, events, subscriber, factory.create(request));
+                var session = new Session(model, request, budget, events, subscriber, factory.create(request), prefix);
                 if (!once.compareAndSet(false, true)) {
                     session.cancel();
                     subscriber.onSubscribe(session);
@@ -58,6 +69,7 @@ public class WorkflowRunner {
         public final LlmAdapter model;
         private final Flow.Subscriber<? super StreamChunk> downstream;
         private final Plan plan;
+        private final String prefix;
         private volatile boolean cancelled;
         private volatile boolean terminal;
         private volatile Flow.Subscription upstream;
@@ -71,12 +83,13 @@ public class WorkflowRunner {
         private Integer outputUsage = 0;
 
         private Session(LlmAdapter original, GenerateRequest base, RunBudget budget, ChatWorkflow.Events events,
-                        Flow.Subscriber<? super StreamChunk> downstream, Plan plan) {
+                        Flow.Subscriber<? super StreamChunk> downstream, Plan plan, String prefix) {
             this.base = base;
             this.budget = budget;
             this.events = events;
             this.downstream = downstream;
             this.plan = plan;
+            this.prefix = prefix;
             this.model = request -> {
                 remaining();
                 Map<String, Object> context;
@@ -88,7 +101,7 @@ public class WorkflowRunner {
                     context = Map.of("modelCalls", modelCalls, "estimatedInputTotal", estimatedInput);
                 }
                 // 落库/发 SSE 会取得外层运行锁，不能持有订阅锁调用，避免与取消反向等待。
-                event("ROUTE_CONTEXT_SELECTED", context);
+                event(prefix + "_CONTEXT_SELECTED", context);
                 return subscriber -> original.generate(request).subscribe(new Flow.Subscriber<StreamChunk>() {
                     private boolean accounted;
                     public void onSubscribe(Flow.Subscription value) { subscriber.onSubscribe(value); }
@@ -101,12 +114,25 @@ public class WorkflowRunner {
                                 outputUsage = sum(outputUsage, usage == null ? null : usage.outputTokens());
                             }
                         }
+                        if (value instanceof StreamChunk.Finished finished && prefix.equals("RUN")) {
+                            var usage = finished.usage();
+                            var data = new HashMap<String, Object>();
+                            data.put("inputTokens", usage == null ? null : usage.inputTokens());
+                            data.put("outputTokens", usage == null ? null : usage.outputTokens());
+                            event("RUN_MODEL_ACCOUNTED", data);
+                        }
                         subscriber.onNext(value);
                     }
                     public void onError(Throwable error) {
                         synchronized (Session.this) {
                             inputUsage = null;
                             outputUsage = null;
+                        }
+                        if (prefix.equals("RUN")) {
+                            var data = new HashMap<String, Object>();
+                            data.put("inputTokens", null);
+                            data.put("outputTokens", null);
+                            event("RUN_MODEL_ACCOUNTED", data);
                         }
                         subscriber.onError(error);
                     }
@@ -140,7 +166,7 @@ public class WorkflowRunner {
                 started = true;
                 deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(budget.timeoutMs());
                 try {
-                    workers.execute(this);
+                    (prefix.equals("RUN") ? rootWorkers : workers).execute(this);
                 } catch (RejectedExecutionException e) {
                     terminal = true;
                     downstream.onError(new GroundedAnswerService.Failure("BUSY", "AUTO 运行容量已满，请稍后重试"));
@@ -171,7 +197,7 @@ public class WorkflowRunner {
             try {
                 remaining();
                 plan.execute(this);
-                event("ROUTE_FINISHED", Map.of("modelCalls", modelCalls));
+                event(prefix + "_FINISHED", Map.of("modelCalls", modelCalls));
                 emit(new StreamChunk.Finished(StreamChunk.FinishReason.STOP, new TokenUsage(inputUsage, outputUsage)));
                 if (!cancelled) {
                     terminal = true;
@@ -181,7 +207,7 @@ public class WorkflowRunner {
                 if (!cancelled && !terminal) {
                     terminal = true;
                     Throwable cause = e instanceof ExecutionException ? e.getCause() : e;
-                    downstream.onError(cause instanceof GroundedAnswerService.Failure || cause instanceof ReactLoopAgent.Failure
+                    downstream.onError(cause instanceof GroundedAnswerService.Failure || cause instanceof ReactLoopAgent.Failure || cause instanceof UserQuestionRequired
                             ? cause : new GroundedAnswerService.Failure("AUTO_FAILED", "AUTO 处理失败，请检查模型或资料配置"));
                 }
             } finally {
@@ -283,5 +309,6 @@ public class WorkflowRunner {
     @PreDestroy
     public void close() {
         workers.shutdownNow();
+        rootWorkers.shutdownNow();
     }
 }

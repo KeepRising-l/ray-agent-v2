@@ -26,7 +26,8 @@ public class GroundedAnswerService {
     }
 
     public EvidenceAssembler.Evidence retrieve(String question, RetrievalFilter scope) {
-        return new EvidenceAssembler().assemble(retrieval.retrieve(question, scope));
+        return new EvidenceBudgetPolicy().fit(question, new EvidenceAssembler().assemble(retrieval.retrieve(question, scope)),
+                cn.ray.agent.runtime.context.ContextAllocationPolicy.EVIDENCE_TOKENS);
     }
 
     public GenerateRequest decisionRequest(String question, EvidenceAssembler.Evidence evidence) {

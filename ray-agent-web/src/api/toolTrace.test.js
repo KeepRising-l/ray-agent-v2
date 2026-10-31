@@ -18,3 +18,10 @@ test('成功事件可刷新重建卡片，仅允许 HTTP(S) 来源链接', () =>
   assert.equal(trace[0].sources.length, 1)
   assert.equal(trace[0].sources[0].id, 'W1')
 })
+
+test('提问等待不是工具失败，用户回答后原工具成功，取消后标中断', () => {
+  const waiting = [event('TOOL_STARTED', { name: 'ask_user' }), event('TOOL_WAITING_USER', { name: 'ask_user', code: 'WAITING_USER' })]
+  assert.equal(toolTrace(waiting, 'WAITING_USER')[0].status, 'WAITING_USER')
+  assert.equal(toolTrace(waiting, 'CANCELLED')[0].status, 'INTERRUPTED')
+  assert.equal(toolTrace([...waiting, event('TOOL_SUCCEEDED', { name: 'ask_user', code: 'USER_ANSWERED' })], 'SUCCEEDED')[0].status, 'SUCCEEDED')
+})

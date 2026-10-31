@@ -140,11 +140,12 @@ def ask(mode, ids, question):
         if event=='text': answer+=value['text']
     assert run, 'no run metadata'
     state=get('/api/runs/'+run); events=get('/api/runs/'+run+'/events')
-    assert state['status']=='SUCCEEDED', 'run failed: '+str(state['errorMessage'])
+    assert state['status'] in ('SUCCEEDED','WAITING_USER'), 'run failed: '+str(state['errorMessage'])
     route=next((json.loads(event['detail']) for event in events if event['type']=='ROUTE_DECIDED'),None)
-    return {'run':run,'session':session['id'],'answer':answer,'route':route,'events':events}
+    return {'run':run,'session':session['id'],'answer':answer,'route':route,'events':events,'status':state['status']}
 
 def check(row, target=None, tools=False, rag=False):
+    assert row['status']=='SUCCEEDED' or target=='CLARIFY', 'only a clarification may wait for user'
     if target: assert row['route'] and row['route']['target']==target, row['route']
     else: assert row['route'] is None, 'explicit mode entered AUTO'
     assert any(event['type']=='TOOL_STARTED' for event in row['events'])==tools, 'wrong tool boundary'
@@ -178,6 +179,7 @@ try:
             assert all(title in row['answer'] for title in ('知识库资料','网页资料','比较与局限'))
             if args.live: assert re.search(r'\[K\d+\]',row['answer']) and re.search(r'\[W\d+\]',row['answer']), 'live hybrid missing both source types'
             else: assert 'NOT_CONFIGURED' in row['answer'] and '暂不能完成' in row['answer']
+        if index==10: assert row['status']=='WAITING_USER' and get('/api/runs/'+row['run']+'/question')['question']
         if index==9: assert '没有知识库事实依据' in row['answer'] or '两类证据均不可用' in row['answer']
         observations.append({'case':index,'mode':mode,'target':target,'run':row['run'],'passed':True})
         print(f'PASS R06 case {index}: {mode} -> {target or mode}',flush=True)

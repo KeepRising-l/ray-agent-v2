@@ -1,6 +1,6 @@
 # RayAgent V2
 
-当前提供本机多轮聊天、网页工具和知识库问答：支持 TXT/Markdown/文本 PDF 入库、授权范围内精确向量检索、证据判断、引用回答、文档删除和重建。登录与 AUTO 路由尚未实现。
+当前提供本机多轮聊天、网页工具、知识库问答与AUTO路由：支持 TXT/Markdown/文本 PDF 入库、授权范围内向量检索与引用、文档生命周期、摘要投影、提问挂起接续、有界运行队列和任务状态查询。登录与部署尚未实现。
 
 首版个人自用，提供三个模式：
 
@@ -108,3 +108,22 @@ ray.embedding.api-key=填写你自己的密钥
 混合链路：`授权检索 → 一次搜索 → 预算允许时抓取首个结果 → 三栏目来源校验 → 输出`。知识库用K编号、网页用W编号，缺失与冲突分别说明；最终混合JSON先缓冲校验，正文随后以SSE发布，检索与工具轨迹仍实时显示。纯CHAT和纯KNOWLEDGE不会经过AUTO分类。分类与生成共用模型预算与时限，用量只在实际提供时累计。
 
 验收入口：[三模式验收](tests/acceptance/three-modes.md)、[本机演示步骤](docs/demo-script.md)。脚本为 `python tools/verify_r06.py --browser`，真实接口加 `--live`；先完成Maven打包再启动脚本。没有部署、登录或多用户认证；不会把路由小样本成功率当通用效果。
+
+
+## 摘要与等待用户（R07）
+
+长对话在预算压力下整理旧轮次摘要，并保留最近4轮；原始历史不删除。摘要覆盖范围、内容指纹与当前投影持久保存，重启后校验恢复；它是历史数据，不是当前知识库/网页的事实依据。配置 `ray.context.compaction-trigger` 默认14000（本地保守估算），`ray.context.keep-recent-turns` 默认4。摘要生成另耗模型用量，只有包含包装开销的投影确实变短才应用；失败保留原投影并回退近期选择。
+
+缺少必要参数时，CHAT/AUTO的模型可单独调用ask_user；AUTO歧义也可先提问。页面显示补充表单，运行状态WAITING_USER，释放执行资源；刷新或重启仍可回答，按原runId和questionId继续。已执行工具不会重放，原允许名单与剩余预算保留；取消、过期、重复回答分别处理。等待期限由 `ray.question.ttl-ms` 配置，默认24小时；等待不占活跃时限。
+
+接口为 `GET /api/runs/{runId}/question` 和 `POST /api/runs/{runId}/answers`，后者正文含questionId/answer并返回SSE；服务端固定身份校验归属。当前上下文诊断 `GET /api/sessions/{id}/context` 返回原范围与模型投影，UI历史继续显示原始消息。SQL新增V007，仍使用Spring显式初始化。
+
+验收见[摘要与接续验收](tests/acceptance/context-and-resume.md)：先打包，再运行 `python tools/verify_r07.py --browser`，真实模型加 `--live`。当前只支持单独ask_user和AUTO路由两类版本1检查点，不宣称任意位置崩溃恢复或生产部署。R07新增代码由助手协作实现，用户阅读与理解待补。
+
+## 并发、任务队列与恢复（R08）
+
+不同会话默认最多2个run执行、8个等待；同会话有活动run时新问题409，重复clientRequestId可查询原run，容量满429且不创建run。SSE与运行记录区分QUEUED/RUNNING/终态，排队可取消和超时；异步流结束或等待用户时才释放执行槽。配置为`ray.run.max-concurrent`、`ray.run.queue-capacity`、`ray.run.max-per-owner`、`ray.run.queue-timeout-ms`。
+
+顶部“任务与运行”查询当前owner的聊天与文档任务，可取消活动run、查看原会话、查询文档尝试记录，并重试最新失败/中断文档。文档临时Embedding失败默认最多自动重试2次，认证/格式/策略错误不自动重试。重启将遗留QUEUED/RUNNING聊天及处理中入库标记中断，不自动重放聊天；有效WAITING_USER仍可按原检查点回答。
+
+查询接口与能力边界、配置和复现命令见[队列与恢复验收](tests/acceptance/queue-and-recovery.md)。当前为单进程FIFO加持久状态，数据库单实例锁仍有效；不是持久MQ或多实例执行。R08真实PG、模拟故障和真实聊天已验证；本机Embedding密钥已删除，本轮真实Embedding未复验通过。新增源码待用户阅读，登录与部署仍未实现。

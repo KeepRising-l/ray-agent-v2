@@ -1,13 +1,16 @@
 /** 发送一条消息，逐段读取后端的 text、done、error 事件。 */
 export async function streamChat(message, signal, onText, channelId, options = {}) {
-  const response = await fetch('/api/chat/stream', {
+  const resume = options.resume
+  const response = await fetch(resume ? `/api/runs/${encodeURIComponent(resume.runId)}/answers` : '/api/chat/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-    body: JSON.stringify({ message, channelId, sessionId: options.sessionId, clientRequestId: options.clientRequestId }),
+    body: JSON.stringify(resume ? { questionId: resume.questionId, answer: resume.answer }
+      : { message, channelId, sessionId: options.sessionId, clientRequestId: options.clientRequestId }),
     signal,
   })
 
   if (!response.ok) {
+    if (response.status === 429) throw new Error('运行容量已满，请等待或取消现有运行后重试。')
     const hint = response.status === 409 ? '当前会话已有运行或请求重复，请查看运行记录。' : `请求失败（HTTP ${response.status}）。`
     throw new Error(response.status === 503 ? '模型尚未配置，请先配置后端。' : hint)
   }
@@ -31,9 +34,16 @@ export async function streamChat(message, signal, onText, channelId, options = {
     if (!data.length) return
     const payload = JSON.parse(data.join('\n'))
     if (name === 'meta') options.onMeta?.(payload)
+    if (name === 'queue') options.onQueue?.(payload)
     if (name === 'tool') options.onTool?.(payload)
     if (name === 'rag') options.onRag?.(payload)
     if (name === 'route') options.onRoute?.(payload)
+    if (name === 'context') options.onContext?.(payload)
+    if (name === 'question') {
+      options.onQuestion?.(payload)
+      finished = true
+      reason = 'WAITING_USER'
+    }
     if (name === 'text' && typeof payload.text === 'string') onText(payload.text)
     if (name === 'error') throw new Error(payload.message || '模型调用失败。')
     if (name === 'done') {
@@ -59,4 +69,9 @@ export async function streamChat(message, signal, onText, channelId, options = {
     await reader.cancel().catch(() => {})
     reader.releaseLock()
   }
+}
+
+/** 补充回答接续同一个run，重复questionId由后端拒绝。 */
+export function streamAnswer(runId, questionId, answer, signal, onText, options = {}) {
+  return streamChat(null, signal, onText, null, { ...options, resume: { runId, questionId, answer } })
 }

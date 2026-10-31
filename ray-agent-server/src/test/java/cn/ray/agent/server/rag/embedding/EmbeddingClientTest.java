@@ -61,6 +61,28 @@ class EmbeddingClientTest {
     }
 
     @Test
+    void malformedAndEmptyJsonArePermanentResponseErrors() throws Exception {
+        for (String response : List.of("{broken-json", "null", "")) {
+            HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+            server.createContext("/embeddings", exchange -> {
+                exchange.getRequestBody().readAllBytes();
+                byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(200, bytes.length == 0 ? -1 : bytes.length);
+                exchange.getResponseBody().write(bytes);
+                exchange.close();
+            });
+            server.start();
+            try (var client = new OpenAiEmbeddingClient(profile(server.getAddress().getPort()), "test", Duration.ofSeconds(2))) {
+                var failure = assertThrows(EmbeddingClient.Failure.class, () -> client.embed(List.of("test")));
+                assertEquals("INVALID_RESPONSE", failure.code());
+                assertFalse(cn.ray.agent.server.task.TaskCheckpointStore.transientEmbedding(failure.code()));
+            } finally {
+                server.stop(0);
+            }
+        }
+    }
+
+    @Test
     void httpFailuresDoNotExposeProviderBodyAndProfileSeparatesSpaces() throws Exception {
         var profile = profile(1);
         assertNotEquals(profile.id(), new EmbeddingProfile(profile.endpoint(), "another", 3, "v1").id());

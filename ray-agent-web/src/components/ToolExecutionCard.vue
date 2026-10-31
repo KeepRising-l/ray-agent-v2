@@ -4,7 +4,7 @@ import { toolTrace } from '../api/toolTrace.js'
 
 const props = defineProps({ events: { type: Array, default: () => [] }, status: String })
 const calls = computed(() => toolTrace(props.events, props.status))
-const labels = { RUNNING: '执行中', SUCCEEDED: '成功', FAILED: '失败', INTERRUPTED: '执行已中断' }
+const labels = { RUNNING: '执行中', WAITING_USER: '等待补充', SUCCEEDED: '成功', FAILED: '失败', INTERRUPTED: '执行已中断' }
 const reasons = {
   INVALID_ARGUMENTS: '参数不符合工具定义', FORBIDDEN: '本次运行不允许调用该工具',
   UNKNOWN_TOOL: '工具未注册', TIMEOUT: '工具请求超时', NOT_CONFIGURED: '搜索服务尚未配置',
@@ -18,9 +18,10 @@ const reasons = {
   <section v-if="calls.length" aria-label="工具执行">
     <h2>工具执行</h2>
     <article v-for="call in calls" :key="call.callId" class="tool-card" :data-status="call.status">
-      <strong>{{ call.name === 'web_search' ? '网页搜索' : call.name === 'web_fetch' ? '网页抓取' : call.name }}</strong>
+      <strong>{{ call.name === 'web_search' ? '网页搜索' : call.name === 'web_fetch' ? '网页抓取' : call.name === 'ask_user' ? '向你提问' : call.name }}</strong>
       <span> · {{ labels[call.status] }} · 第 {{ call.step }} 步</span>
-      <p v-if="call.status !== 'RUNNING'">{{ call.status === 'SUCCEEDED' ? '执行完成' : call.status === 'INTERRUPTED' ? '运行已结束' : (reasons[call.code] || '工具执行失败') }} · {{ call.durationMs || 0 }} ms</p>
+      <p v-if="call.status === 'WAITING_USER'">等待你的补充，工作线程已释放。</p>
+      <p v-else-if="call.status !== 'RUNNING'">{{ call.status === 'SUCCEEDED' ? '执行完成' : call.status === 'INTERRUPTED' ? '运行已结束' : (reasons[call.code] || '工具执行失败') }} · {{ call.durationMs || 0 }} ms</p>
       <ul v-if="call.sources.length">
         <li v-for="source in call.sources" :key="source.id + source.kind">
           <a :href="source.url" target="_blank" rel="noopener noreferrer">[{{ source.id }}] {{ source.title || source.url }}</a>

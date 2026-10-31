@@ -21,6 +21,7 @@ public class DocumentIngestionService {
     private final ParserSelector parsers;
     private final EmbeddingClient embedding;
     private final DocumentDeleteService deletion;
+    private cn.ray.agent.server.task.RetryScheduler retries;
     private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor(task -> {
         Thread thread = new Thread(task, "document-ingestion");
         thread.setDaemon(true);
@@ -32,7 +33,6 @@ public class DocumentIngestionService {
         this(store, files, parsers, embedding, new DocumentDeleteService(store, files));
     }
 
-    @org.springframework.beans.factory.annotation.Autowired
     public DocumentIngestionService(DocumentRepository store, DocumentFileStore files, ParserSelector parsers,
                                      EmbeddingClient embedding, DocumentDeleteService deletion) {
         this.store = store;
@@ -40,6 +40,13 @@ public class DocumentIngestionService {
         this.parsers = parsers;
         this.embedding = embedding;
         this.deletion = deletion;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public DocumentIngestionService(DocumentRepository store,DocumentFileStore files,ParserSelector parsers,
+            EmbeddingClient embedding,DocumentDeleteService deletion,cn.ray.agent.server.task.RetryScheduler retries) {
+        this(store,files,parsers,embedding,deletion);
+        this.retries=retries;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -53,7 +60,8 @@ public class DocumentIngestionService {
         }
         try {
             deletion.cleanup();
-            var work = store.claim();
+            if(retries!=null){retries.tick();}
+            var work = store.claim(embedding.profile().id());
             if (work != null) {
                 process(work);
             }
@@ -88,9 +96,9 @@ public class DocumentIngestionService {
             stage = "SAVING";
             store.publish(work, embedding.profile(), chunks, vectors);
         } catch (DocumentParser.Failure e) {
-            store.fail(id, stage, e.getMessage(), false);
+            store.fail(id, stage, e.getMessage(), false,"PARSER_OR_POLICY",false);
         } catch (EmbeddingClient.Failure e) {
-            store.fail(id, stage, e.getMessage(), false);
+            store.fail(id, stage, e.getMessage(), false,e.code(),cn.ray.agent.server.task.TaskCheckpointStore.transientEmbedding(e.code()));
         } catch (java.io.IOException e) {
             store.fail(id, stage, "原文件读取失败，或文件摘要与上传记录不一致", false);
         } catch (Exception e) {

@@ -8,16 +8,17 @@ export function toolTrace(events, runStatus) {
     if (!data.callId) continue
     if (event.type === 'TOOL_STARTED') {
       calls.set(data.callId, { ...data, status: 'RUNNING', sources: [] })
-    } else if (calls.has(data.callId)) {
+    } else if (calls.has(data.callId) && ['TOOL_SUCCEEDED', 'TOOL_FAILED', 'TOOL_WAITING_USER'].includes(event.type)) {
       const sources = event.type === 'TOOL_SUCCEEDED' ? (data.sources || []).filter(source => {
         try {
           const url = new URL(source.url)
           return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password
         } catch { return false }
       }) : []
-      calls.set(data.callId, { ...data, status: event.type === 'TOOL_SUCCEEDED' ? 'SUCCEEDED' : 'FAILED', sources })
+      calls.set(data.callId, { ...data, status: event.type === 'TOOL_SUCCEEDED' ? 'SUCCEEDED'
+        : event.type === 'TOOL_WAITING_USER' ? 'WAITING_USER' : 'FAILED', sources })
     }
   }
-  return [...calls.values()].map(call => call.status === 'RUNNING' && runStatus && runStatus !== 'RUNNING'
+  return [...calls.values()].map(call => ['RUNNING', 'WAITING_USER'].includes(call.status) && runStatus && !['RUNNING', 'WAITING_USER'].includes(runStatus)
     ? { ...call, status: 'INTERRUPTED', code: runStatus } : call)
 }

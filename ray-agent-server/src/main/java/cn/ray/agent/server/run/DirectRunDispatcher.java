@@ -8,10 +8,10 @@ import org.springframework.stereotype.Component;
 import java.util.concurrent.Flow;
 
 /** 复用模型适配器的异步执行；本层不再创建一套无界执行队列。 */
-@Component
 public class DirectRunDispatcher implements RunDispatcher {
     @Override
-    public RunHandle dispatch(LlmAdapter adapter, GenerateRequest request, Flow.Subscriber<StreamChunk> subscriber) {
+    public RunHandle dispatch(RunDispatcher.Context context,LlmAdapter adapter, GenerateRequest request, Flow.Subscriber<StreamChunk> subscriber) {
+        context.started().run();
         RunHandle handle = new RunHandle();
         try {
             adapter.generate(request).subscribe(new Flow.Subscriber<>() {

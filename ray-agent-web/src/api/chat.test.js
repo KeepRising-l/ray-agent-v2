@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { streamChat } from './chat.js'
+import { streamChat, streamAnswer } from './chat.js'
 
 function responseFrom(text) {
   const bytes = new TextEncoder().encode(text)
@@ -105,4 +105,42 @@ test('会话和请求编号随输入提交，运行编号由服务端元数据�
   } finally {
     globalThis.fetch = previous
   }
+})
+
+test('等待用户是暂停而非流提前结束，提问与摘要事件不混入回答文本', async () => {
+  await withResponse(responseFrom('event:context\ndata:{"type":"COMPACTION_APPLIED","detail":"{}"}\n\nevent:question\ndata:{"id":"q1","runId":"r1","question":"城市？"}\n\n'), async () => {
+    const contexts = []; let question; let text = ''
+    const result = await streamChat('问题', new AbortController().signal, value => { text += value }, 'channel', {
+      onContext: value => contexts.push(value), onQuestion: value => { question = value },
+    })
+    assert.equal(result, 'WAITING_USER'); assert.equal(question.id, 'q1'); assert.equal(text, '')
+    assert.equal(contexts[0].type, 'COMPACTION_APPLIED')
+  })
+})
+
+test('补充回答提交原runId和questionId，不创建新的聊天请求', async () => {
+  const previous = globalThis.fetch; let url; let body
+  globalThis.fetch = async (path, options) => { url = path; body = JSON.parse(options.body); return responseFrom('event:done\ndata:{"reason":"STOP"}\n\n') }
+  try {
+    await streamAnswer('run-1', 'question-1', '杭州', new AbortController().signal, () => {})
+    assert.equal(url, '/api/runs/run-1/answers'); assert.deepEqual(body, { questionId: 'question-1', answer: '杭州' })
+  } finally { globalThis.fetch = previous }
+})
+
+test('排队与启动分别通知，收到排队事件仍须等完成事件', async () => {
+  const input = 'event:queue\ndata:{"runId":"r1","status":"QUEUED"}\n\nevent:queue\ndata:{"runId":"r1","status":"RUNNING"}\n\nevent:done\ndata:{"reason":"STOP"}\n\n'
+  await withResponse(responseFrom(input), async () => {
+    const states = []
+    assert.equal(await streamChat('问题', new AbortController().signal, () => {}, 'channel', { onQueue: value => states.push(value.status) }), 'STOP')
+    assert.deepEqual(states, ['QUEUED', 'RUNNING'])
+  })
+  await withResponse(responseFrom('event:queue\ndata:{"status":"QUEUED"}\n\n'), async () => {
+    await assert.rejects(streamChat('问题', new AbortController().signal, () => {}), /未收到完成事件/)
+  })
+})
+
+test('过载429明确提示等待或取消，不开始读取流', async () => {
+  await withResponse(new Response('{}', { status: 429 }), async () => {
+    await assert.rejects(streamChat('问题', new AbortController().signal, () => {}), /容量已满/)
+  })
 })

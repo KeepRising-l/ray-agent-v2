@@ -35,7 +35,7 @@ public class HybridChatWorkflow {
         Evidence evidence;
         String knowledgeStatus = "OK";
         try {
-            evidence = answers.retrieve(question, new RetrievalFilter(scope.ownerId(), scope.knowledgeBaseIds()));
+            evidence = new EvidenceBudgetPolicy().fit(question, answers.retrieve(question, new RetrievalFilter(scope.ownerId(), scope.knowledgeBaseIds())), 4000);
             if (evidence.citations().isEmpty()) {
                 knowledgeStatus = "NO_EVIDENCE";
             }
@@ -96,7 +96,7 @@ public class HybridChatWorkflow {
                 assigned.add(new ToolResult.Source(known.id(), source.title(), source.url(), source.kind()));
             }
         }
-        var normalized = new ToolResult(result.success(), result.code(), result.content(), assigned);
+        var normalized = new ToolResult(result.success(), result.code(), new ContextAllocationPolicy().toolText(result.content()), assigned);
         execution.events.tools().accept(new AgentEventSink.Event(result.success() ? "TOOL_SUCCEEDED" : "TOOL_FAILED", step, callId, name,
                 result.code(), TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start), assigned));
         return normalized;

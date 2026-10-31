@@ -79,22 +79,28 @@ public class ConversationRepository {
 
     /** 锁住会话行后检查重复请求和活动运行，避免同一会话产生交错写入。 */
     public Run begin(String owner, String sessionId, String requestId, String channel, String model, String input) {
+        return begin(owner,sessionId,requestId,channel,model,input,"RUNNING");
+    }
+
+    public Run beginQueued(String owner,String sessionId,String requestId,String channel,String model,String input) {
+        return begin(owner,sessionId,requestId,channel,model,input,"QUEUED");
+    }
+
+    private Run begin(String owner,String sessionId,String requestId,String channel,String model,String input,String initialState) {
         return transactions.execute(status -> {
-            var owned = jdbc.queryForList("SELECT id FROM ra_session WHERE id=? AND owner_id=? FOR UPDATE", sessionId, owner);
-            if (owned.isEmpty()) {
-                throw missing();
-            }
-            if (!jdbc.queryForList("SELECT id FROM ra_run WHERE session_id=? AND client_request_id=?", sessionId, requestId).isEmpty()) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "重复请求，请查询已有运行");
-            }
-            if (!jdbc.queryForList("SELECT id FROM ra_run WHERE session_id=? AND status IN ('CREATED','RUNNING')", sessionId).isEmpty()) {
+            new cn.ray.agent.server.run.SessionWriteLease().acquire(jdbc,owner,sessionId);
+            new cn.ray.agent.server.run.RequestIdempotencyService(jdbc,this).assertNew(owner,sessionId,requestId,input,channel);
+            if (!jdbc.queryForList("SELECT id FROM ra_run WHERE session_id=? AND status IN ('CREATED','QUEUED','RUNNING','WAITING_USER')", sessionId).isEmpty()) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "当前会话已有运行，请先等待或取消");
             }
             String id = UUID.randomUUID().toString();
             long now = System.currentTimeMillis();
-            jdbc.update("INSERT INTO ra_run(id,session_id,owner_id,client_request_id,channel_id,configured_model,status,created_at) VALUES (?,?,?,?,?,?,'RUNNING',?)", id, sessionId, owner, requestId, channel, model, now);
+            jdbc.update("INSERT INTO ra_run(id,session_id,owner_id,client_request_id,channel_id,configured_model,status,created_at) VALUES (?,?,?,?,?,?,?,?)", id, sessionId, owner, requestId, channel, model, initialState, now);
             jdbc.update("INSERT INTO ra_message VALUES (?,?,?,'USER',?,TRUE,?)", UUID.randomUUID().toString(), sessionId, id, input, now);
-            event(id, "STARTED", "channel=" + channel);
+            if(initialState.equals("QUEUED")) {
+                cn.ray.agent.server.task.TaskStateRepository.enqueue(jdbc,owner,id,"NEW");
+            }
+            event(id, initialState.equals("QUEUED") ? "QUEUED" : "STARTED", "channel=" + channel);
             return run(owner, id);
         });
     }
@@ -125,16 +131,25 @@ public class ConversationRepository {
         return Boolean.TRUE.equals(transactions.execute(tx -> {
             Run current = run(owner, id);
             jdbc.queryForList("SELECT id FROM ra_run WHERE id=? FOR UPDATE", id);
-            int changed = jdbc.update("UPDATE ra_run SET status=?,ended_at=?,input_tokens=?,output_tokens=?,error_message=? WHERE id=? AND status IN ('CREATED','RUNNING')", state, System.currentTimeMillis(), usage == null ? null : usage.inputTokens(), usage == null ? null : usage.outputTokens(), error, id);
+            int changed = jdbc.update("UPDATE ra_run SET status=?,ended_at=?,input_tokens=?,output_tokens=?,error_message=? WHERE id=? AND status IN ('CREATED','QUEUED','RUNNING','WAITING_USER')", state, System.currentTimeMillis(), usage == null ? null : usage.inputTokens(), usage == null ? null : usage.outputTokens(), error, id);
             if (changed == 0) {
                 return false;
             }
             if (output != null && !output.isBlank()) {
-                jdbc.update("INSERT INTO ra_message VALUES (?,?,?,'ASSISTANT',?,?,?)", UUID.randomUUID().toString(), current.sessionId(), id, output, "SUCCEEDED".equals(state), System.currentTimeMillis());
+                saveOutput(current.sessionId(), id, output, "SUCCEEDED".equals(state));
             }
             event(id, state, error != null ? error : (reason == null ? "" : "reason=" + reason));
             return true;
         }));
+    }
+
+    /** 暂停和最终完成更新同一条助手消息，避免恢复后出现重复的部分回答。 */
+    public void saveOutput(String session, String run, String content, boolean complete) {
+        if (content == null || content.isBlank()) {
+            return;
+        }
+        jdbc.update("INSERT INTO ra_message VALUES (?,?,?,'ASSISTANT',?,?,?) ON CONFLICT(run_id) WHERE role='ASSISTANT' DO UPDATE SET content=EXCLUDED.content, complete=EXCLUDED.complete",
+                UUID.randomUUID().toString(), session, run, content, complete, System.currentTimeMillis());
     }
 
     public Run run(String owner, String id) {
@@ -167,7 +182,7 @@ public class ConversationRepository {
         return transactions.execute(tx -> {
             run(owner, id);
             jdbc.queryForList("SELECT id FROM ra_run WHERE id=? FOR UPDATE", id);
-            if (!run(owner, id).status().equals("RUNNING")) {
+            if (!java.util.Set.of("RUNNING","QUEUED").contains(run(owner, id).status())) {
                 return null;
             }
             return event(id, type, detail);
@@ -176,7 +191,7 @@ public class ConversationRepository {
 
     /** 进程重启后不自动重放模型请求；之前的活动运行标记为中断。 */
     public void recover() {
-        var rows = jdbc.query("SELECT id,owner_id FROM ra_run WHERE status IN ('CREATED','RUNNING')", (r, n) -> new String[]{r.getString("id"), r.getString("owner_id")});
+        var rows = jdbc.query("SELECT id,owner_id FROM ra_run WHERE status IN ('CREATED','QUEUED','RUNNING')", (r, n) -> new String[]{r.getString("id"), r.getString("owner_id")});
         for (var row : rows) {
             finish(row[1], row[0], "INTERRUPTED", "", null, "服务重启，运行已中断");
         }
