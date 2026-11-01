@@ -1,3 +1,4 @@
+const {openInspector,closeInspector}=require('./ui_navigation.cjs')
 const { loginForVerification } = require('./browser_auth.cjs')
 /** 本机浏览器验收；由 verify_r03.py 启动隔离后端和前端，不操作用户的 IDEA 进程。 */
 const { chromium } = require('playwright')
@@ -16,6 +17,7 @@ async function main() {
       ? '请调用 web_fetch 抓取 https://example.com/ ，仅根据抓取正文用中文说明这个网站的用途，并引用来源编号。'
       : 'fetch')
     await page.getByRole('button', { name: '发送', exact: true }).click()
+    await openInspector(page)
     await page.locator('.tool-card[data-status="SUCCEEDED"]').first().waitFor({ timeout: 100000 })
     await page.getByRole('button', { name: '发送', exact: true }).waitFor()
     await page.waitForFunction(() => !document.querySelector('#message').disabled, null, { timeout: 100000 })
@@ -24,13 +26,16 @@ async function main() {
     assert.match(await page.locator('.tool-card').innerText(), /已抓取正文/)
     assert.equal(await page.locator('.tool-card a').first().getAttribute('href'), 'https://example.com/')
     await page.reload()
+    await openInspector(page)
     await page.locator('.tool-card[data-status="SUCCEEDED"]').first().waitFor()
     await page.waitForFunction(() => document.querySelector('section[aria-label="历史消息"]').innerText.includes('[W1]'))
     assert.match(await page.locator('.tool-card').innerText(), /Example Domain/)
     assert.match(await page.locator('section[aria-label="历史消息"]').innerText(), /\[W1\]/)
     if (process.argv[3] !== 'live') {
+      await closeInspector(page)
       await page.locator('#message').fill('blocked')
       await page.getByRole('button', { name: '发送', exact: true }).click()
+      await openInspector(page)
       await page.locator('.tool-card[data-status="FAILED"]').first().waitFor()
       await page.waitForFunction(() => !document.querySelector('#message').disabled)
       assert.equal(await page.locator('.tool-card a').count(), 0)

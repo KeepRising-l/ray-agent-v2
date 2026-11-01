@@ -14,7 +14,10 @@ const doc = { id: 'doc-one', name: '巡检手册.pdf', latestVersion: 2, activeV
 const versions = [{ id: 'version-two', documentId: doc.id, version: 2, status: 'FAILED', chunkCount: 0, failureStage: 'PARSING', errorMessage: doc.errorMessage }, { id: 'version-one', documentId: doc.id, version: 1, status: 'READY', chunkCount: 1 }]
 let deleted = false
 function sse(res, name, payload) { res.write('event:'+name+'\ndata:'+JSON.stringify(payload)+'\n\n') }
-function start(port = 0) {
+function start(port = 0, { richChat = false } = {}) {
+  if (richChat && messages['session-a'].length === 1) {
+    messages['session-a'].push({ id: 'ui-reading-answer', role: 'ASSISTANT', complete: true, content: '可以把接口理解成一份**能力约定**：它说明一个对象能做什么。\n\n### 用一个具体例子\n假设我们需要接入不同的模型供应商，可以先约定一个统一入口：\n\n```java\npublic interface LlmAdapter {\n    Publisher<StreamChunk> generate(GenerateRequest request);\n}\n```\n\n- 调用方依赖这个接口，不必知道请求最终发往哪里。\n- 不同供应商各自完成协议适配。\n- 测试时，可以换成一个可控的模拟实现。\n\n这样，**调用关系保持稳定，具体实现可以替换**。如果你愿意，我们可以接着拿一次真实请求走一遍。' })
+  }
   const server = http.createServer(async (req, res) => {
     const path = req.url; let body = ''; for await (const chunk of req) body += chunk
     const send = (value, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(value)) }

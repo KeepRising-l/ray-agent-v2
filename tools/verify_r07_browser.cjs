@@ -1,3 +1,4 @@
+const {openNewSession}=require('./ui_navigation.cjs')
 const { loginForVerification } = require('./browser_auth.cjs')
 const { chromium } = require('playwright')
 const assert = require('node:assert/strict')
@@ -10,6 +11,7 @@ async function main() {
     await loginForVerification(page, process.argv[2])
     await page.goto(process.argv[2])
     await page.locator('#channel option').first().waitFor({ state: 'attached' })
+    await openNewSession(page)
     await page.locator('#new-mode').selectOption('CHAT')
     await page.getByRole('button', { name: '新建会话', exact: true }).click()
     await page.waitForFunction(() => !document.querySelector('#message').disabled)

@@ -1,4 +1,5 @@
 const { loginForVerification } = require('./browser_auth.cjs')
+const {openInspector}=require('./ui_navigation.cjs')
 const { chromium } = require('playwright')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
@@ -24,6 +25,7 @@ async function main() {
     fs.mkdirSync('logs', { recursive: true })
     await page.screenshot({ path: 'logs/r08-browser.png', fullPage: true })
     await queued.getByRole('button', { name: '查看会话', exact: true }).click()
+    await openInspector(page)
     await page.locator('#trace-run').waitFor()
     await page.waitForFunction(id => document.querySelector('#trace-run')?.value === id, process.argv[3])
     console.log('PASS browser: capacity, QUEUED status, cancel without model call, open original session'+(process.argv[4] ? ', two document attempts' : ''))
