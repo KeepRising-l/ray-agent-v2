@@ -24,3 +24,6 @@ application-local.properties
 credentials.json
 credentials.yml
 credentials.yaml
+
+# 本机 UI 改造前的文件备份，不进仓库
+.backup-ui-*/

@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, onUnmounted, ref } from 'vue'
 import { readSession, login, logout as endSession } from '../api/auth.js'
+import BrandMark from './BrandMark.vue'
 const session = ref(null)
 const username = ref('owner')
 const password = ref('')
@@ -27,19 +28,18 @@ onUnmounted(() => window.removeEventListener('ray-auth-required', expired))
 </script>
 <template>
   <template v-if="session?.authenticated">
-    <p v-if="error" role="alert">{{ error }}</p>
+    <p v-if="error" class="session-error" role="alert">{{ error }}</p>
     <slot :user="session.username" :logout="logout" />
   </template>
-  <main v-else class="login-page">
-    <h1>登录 RayAgent</h1>
-    <p>使用同一个个人账号进入聊天与管理后台。</p>
-    <p>首次启动的登录信息在服务端本机 <code>.ray-data/identity/initial-login.txt</code>。</p>
+  <main v-else class="login-screen"><div class="login-brand"><BrandMark/><span>RayAgent</span></div><section class="login-panel">
+    <BrandMark/><h1>登录 RayAgent</h1>
+    <p class="login-intro">继续你的对话，查阅你的资料。</p>
     <form @submit.prevent="submit">
       <label for="login-username">账号</label><input id="login-username" v-model="username" autocomplete="username" maxlength="40" :disabled="busy" />
       <label for="login-password">密码</label><input id="login-password" v-model="password" type="password" autocomplete="current-password" :disabled="busy" />
-      <div><button class="primary" :disabled="busy || !username || !password || !session">登录</button><button type="button" :disabled="busy" @click="refresh">刷新登录状态</button></div>
+      <div class="login-actions"><button class="primary" :disabled="busy || !username || !password || !session">{{ busy ? '正在登录…' : '登录' }}</button><button type="button" :disabled="busy" @click="refresh">刷新登录状态</button></div>
     </form>
     <p v-if="error" role="alert">{{ error }}</p>
-  </main>
+    <details class="login-help"><summary>首次登录说明</summary><p>使用你的个人账号进入聊天与管理后台。首次启动的登录信息在服务端本机 <code>.ray-data/identity/initial-login.txt</code>。</p></details>
+  </section></main>
 </template>
-<style scoped>.login-page { max-width: 540px; }code { overflow-wrap: anywhere; }input { width: 100%; }</style>

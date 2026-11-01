@@ -20,7 +20,7 @@ export async function logout() {
   if (!response.ok) throw new Error('退出未确认，请刷新页面检查登录状态')
   token = ''
   // 浏览器禁用本地存储时，服务端退出仍然有效；不让清理异常阻止页面返回登录状态。
-  try { for (const key of Object.keys(localStorage)) if (key.startsWith('ray-')) localStorage.removeItem(key) } catch { /* 服务端会话已经失效。 */ }
+  try { for (const key of Object.keys(localStorage)) if (key.startsWith('ray-') && key !== 'ray-ui-theme') localStorage.removeItem(key) } catch { /* 服务端会话已经失效。 */ }
   return readSession()
 }
 export async function authRejected(status) {

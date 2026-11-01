@@ -159,3 +159,7 @@ ray.rag.experimental.rerank=false
 自写20题真实Embedding对照中，向量@6为19/20、融合20/20；这只是候选证据命中，小样本不作为默认启用依据或回答准确率。执行`python tools/verify_r11.py`做隔离模拟验证，`--live`使用本机真实模型/向量；比较API为已鉴权的`POST /api/admin/retrieval/compare`，每次可能产生一次Embedding用量。详见[检索对照](tests/evaluation/retrieval-comparison.md)与[质量报告](tests/evaluation/quality-report.md)。
 
 部署配置见[干净启动](docs/operations/clean-start.md)。Docker从源码构建前后端并放在同一个应用镜像，数据库和个人数据使用独立卷。`GET /api/health`只报告本进程与数据库就绪，不代表外部模型/向量在线。演示和故障处理分别见[演示脚本](docs/demo-script.md)、[恢复手册](docs/operations/recovery-playbook.md)；[贡献事实清单](docs/resume-claims.md)保留AI协作与用户尚未阅读的边界。
+
+## 对话界面
+
+界面采用左侧会话、中央回答和底部输入框，默认浅色，左下可切深色并记住选择；手机通过左上导航打开会话列表。新建对话时配置模式和资料范围，回答中的 K/W 编号打开该消息的来源；运行详情收纳在“来源与运行”。支持基础文本/代码排版、代码复制、Enter发送和Shift+Enter换行。说明与验证边界见[界面设计说明](docs/ui-chat-design.md)。

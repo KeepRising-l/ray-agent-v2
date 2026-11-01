@@ -1,10 +1,28 @@
 <script setup>
-import { computed } from 'vue'
-const props = defineProps({ content: String, sources: Boolean, disabled: Boolean })
+import { computed, onUnmounted, ref } from 'vue'
+import { messageBlocks } from '../api/messageFormat.js'
+import MessageInline from './MessageInline.vue'
+import UiIcon from './UiIcon.vue'
+const props = defineProps({ content: String, sources: Boolean, disabled: Boolean, plain: Boolean })
 defineEmits(['source'])
-const parts = computed(() => (props.content || '').split(/(\[(?:K|W)\d+\])/g))
+const blocks = computed(() => props.plain ? [{ type: 'paragraph', text: props.content }] : messageBlocks(props.content))
+const copied = ref(-1)
+const copyError = ref(-1)
+let timer
+async function copy(text, index) {
+  clearTimeout(timer)
+  try { await navigator.clipboard.writeText(text); copied.value = index; copyError.value = -1 }
+  catch { copied.value = -1; copyError.value = index }
+  timer = setTimeout(() => { copied.value = -1; copyError.value = -1 }, 2000)
+}
+onUnmounted(() => clearTimeout(timer))
 </script>
-<template>
-  <p class="answer"><template v-for="(part, index) in parts" :key="index"><button v-if="sources && /^\[(K|W)\d+\]$/.test(part)" type="button" class="inline-source" :aria-label="`查看此回答的 ${part.slice(1, -1)} 来源`" :disabled="disabled" @click="$emit('source', part.slice(1, -1))">{{ part }}</button><template v-else>{{ part }}</template></template></p>
-</template>
-<style scoped>.answer { white-space: pre-wrap; overflow-wrap: anywhere; }.inline-source { display: inline; padding: 0 .12rem; margin: 0; color: #294e71; border: 0; background: transparent; text-decoration: underline; }</style>
+<template><div class="message-content">
+  <template v-for="(block, index) in blocks" :key="index">
+    <div v-if="block.type === 'code'" class="code-block"><div class="code-heading"><span>{{ block.language || '代码' }}</span><button type="button" @click="copy(block.text, index)"><UiIcon :name="copied === index ? 'check' : 'copy'" :size="14"/>{{ copied === index ? '已复制' : copyError === index ? '复制失败' : '复制代码' }}</button></div><pre><code>{{ block.text }}</code></pre></div>
+    <component :is="'h' + block.level" v-else-if="block.type === 'heading'"><MessageInline :text="block.text" :sources="sources" :disabled="disabled" @source="$emit('source', $event)"/></component>
+    <component :is="block.type === 'ordered' ? 'ol' : 'ul'" v-else-if="block.type === 'list' || block.type === 'ordered'"><li v-for="(item, n) in block.items" :key="n"><MessageInline :text="item" :sources="sources" :disabled="disabled" @source="$emit('source', $event)"/></li></component>
+    <blockquote v-else-if="block.type === 'quote'"><MessageInline :text="block.text" :sources="sources" :disabled="disabled" @source="$emit('source', $event)"/></blockquote>
+    <p v-else class="answer"><template v-if="plain">{{ block.text }}</template><MessageInline v-else :text="block.text" :sources="sources" :disabled="disabled" @source="$emit('source', $event)"/></p>
+  </template>
+</div></template>

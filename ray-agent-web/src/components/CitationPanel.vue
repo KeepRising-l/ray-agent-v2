@@ -37,7 +37,7 @@ defineExpose({ openCitation: async id => {
     <h2>知识库资料</h2>
     <p v-if="trace.refused">本次资料依据不足，没有生成资料事实回答。</p>
     <article v-for="source in trace.citations" :key="source.id" class="citation-card">
-      <button type="button" @click="open(source)">[{{ source.id }}] {{ source.documentName }}</button>
+      <button type="button" :aria-label="`核对引用原文：${source.documentName}`" :aria-expanded="!!opened[source.id]" :aria-busy="!!opened[source.id]?.loading" @click="open(source)">[{{ source.id }}] {{ source.documentName }} · 核对原文</button>
       <span> · v{{ source.version }} · {{ source.page ? `第${source.page}页` : '文本' }} · 第{{ source.paragraph }}段</span>
       <p>{{ trace.used.includes(source.id) && run?.status === 'SUCCEEDED' ? '回答已引用' : '检索候选' }} · 相似度 {{ source.score.toFixed(3) }}</p>
       <SourcePreview :source="source" :detail="opened[source.id]" />

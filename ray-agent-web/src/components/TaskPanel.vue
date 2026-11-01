@@ -67,6 +67,7 @@ onUnmounted(() => { disposed = true; clearInterval(timer) })
     <p v-if="capacity">执行中 {{ capacity.running }}/{{ capacity.runningLimit }} · 排队 {{ capacity.queued }}/{{ capacity.queueLimit }} · 本进程过载拒绝 {{ capacity.rejected }} 次</p>
     <p>排队表示已接收，完成后才会显示成功；等待用户的运行可以回到原会话补充信息。</p>
     <p role="status">{{ message }}</p>
+    <p v-if="capacity && !tasks.length" class="empty-task-list">当前没有需要处理的任务。</p>
     <article v-for="task in tasks" :key="task.kind + task.id" class="task-card" :data-status="task.status">
       <strong>{{ task.kind === 'RUN' ? '对话运行' : '文档入库' }} · {{ task.status }}</strong>
       <p>{{ task.id }}</p>

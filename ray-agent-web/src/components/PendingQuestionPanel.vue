@@ -15,7 +15,7 @@ watch(() => props.question?.id, () => { answer.value = '' })
       <form @submit.prevent="emit('answer', answer.trim())">
         <label for="user-answer">你的补充</label>
         <textarea id="user-answer" v-model="answer" maxlength="2000" :disabled="disabled" rows="3" />
-        <button type="submit" :disabled="disabled || !answer.trim()">回答并继续</button>
+        <button type="submit" class="primary" :disabled="disabled || !answer.trim()">回答并继续</button>
       </form>
     </template>
     <p v-else-if="question.status === 'ANSWERED'">你已补充：{{ question.answer }}</p>
