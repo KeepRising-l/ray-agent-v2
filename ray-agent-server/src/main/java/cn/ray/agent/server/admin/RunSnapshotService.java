@@ -27,5 +27,11 @@ public class RunSnapshotService {
     }
     /** channelVersion校验接续时模型是否变化；policy固定该run预算，Embedding字段标识当时的索引空间。 */
     public record Snapshot(String channelId,String model,String baseUrl,String channelVersion,RuntimePolicyService.Policy policy,
-                           String embeddingProfile,String embeddingModel,int embeddingDimension) { }
+                           String embeddingProfile,String embeddingModel,int embeddingDimension,
+                           cn.ray.agent.server.rag.retrieve.RetrievalExperimentPolicy retrieval) {
+        public Snapshot {
+            // R10历史快照没有实验字段，当时确实只运行向量基线。
+            if (retrieval == null) retrieval = cn.ray.agent.server.rag.retrieve.RetrievalExperimentPolicy.baseline();
+        }
+    }
 }

@@ -11,6 +11,7 @@ parser.add_argument('--live',action='store_true')
 parser.add_argument('--browser',action='store_true')
 parser.add_argument('--admin',action='store_true',help='在R08隔离环境中追加R10管理验收')
 parser.add_argument('--review',action='store_true',help='R10验收后保持隔离页面供独立UX走查')
+parser.add_argument('--quality',action='store_true',help='追加R11检索对照与可靠性验收')
 parser.add_argument('--skip-embedding',action='store_true',help='仅在真实模式中跳过未配置密钥的Embedding，单独记录聊天验证范围')
 args=parser.parse_args()
 assert not args.skip_embedding or args.live,'--skip-embedding only applies to --live'
@@ -48,6 +49,7 @@ class Relay(BaseHTTPRequestHandler):
             label=text.split('\n',1)[0]
             seen.append(label)
             if label in gates: gates[label].wait(90)
+            if args.quality and not args.live and label.startswith('r11-load-'): time.sleep(.15)
         try:
             if args.live:
                 prefix='ray.embedding' if embedding else 'ray.model'
@@ -67,6 +69,10 @@ class Relay(BaseHTTPRequestHandler):
                 if last['role']=='tool': delta={'content':'收到补充：'+json.loads(last['content'])['userAnswer']}
                 elif 'ask_user' in text:
                     delta={'tool_calls':[{'index':0,'id':'r08-question','type':'function','function':{'name':'ask_user','arguments':json.dumps({'question':'目标城市是哪里？'})}}]};reason='tool_calls'
+                if args.quality:
+                    from verify_r11 import mock_content
+                    value=mock_content(request)
+                    if value is not None: delta={'content':value};reason='stop'
                 self.send_response(200);self.send_header('Content-Type','text/event-stream');self.end_headers()
                 for chunk,finish in [(delta,None),({},reason)]:
                     self.wfile.write(('data: '+json.dumps({'choices':[{'index':0,'delta':chunk,'finish_reason':finish}]})+'\n\n').encode())
@@ -283,6 +289,9 @@ try:
     (ROOT/'logs'/('r08-live.json' if args.live else 'r08-mock.json')).write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
     if args.admin:
         from verify_r10 import verify
+        verify(globals())
+    if args.quality:
+        from verify_r11 import verify
         verify(globals())
 finally:
     for gate in gates.values(): gate.set()

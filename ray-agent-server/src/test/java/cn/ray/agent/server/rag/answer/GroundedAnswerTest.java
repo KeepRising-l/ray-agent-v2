@@ -91,6 +91,28 @@ class GroundedAnswerTest {
     }
 
     @Test
+    void optionalRerankReservesBudgetForJudgeAndAnswer() throws Exception {
+        var second = new RetrievedChunk("second", "kb", "doc", "另一资料", "version", 1,
+                "其他事实 Oak73", null, 1, "", 0, 10, .7);
+        var answers = answers();
+        when(answers.retrieve(anyString(), any())).thenReturn(new EvidenceAssembler().assemble(List.of(hit, second)));
+        var workflow = new KnowledgeChatWorkflow(answers, new RetrievalExperimentPolicy(false, false, true));
+        var events = new CopyOnWriteArrayList<RagStreamEventMapper.Event>();
+        var calls = new AtomicInteger();
+        try {
+            var model = model(step -> text(step == 1 ? "{\"answerable\":true,\"sources\":[{\"id\":\"K1\",\"quote\":\"Pine42\"}]}" : "Pine42 [K1]。"), calls);
+            Probe probe = new Probe();
+            workflow.bind(model, new cn.ray.agent.server.chat.ChatWorkflow.Scope("owner", List.of("kb")),
+                    new cn.ray.agent.runtime.agent.RunBudget(2, 0, 2000, 500, 24000),
+                    new cn.ray.agent.server.chat.ChatWorkflow.Events(event -> {}, events::add)).generate(request).subscribe(probe);
+            probe.done.get(3, TimeUnit.SECONDS);
+            assertNull(probe.error);
+            assertEquals(2, calls.get());
+            assertTrue(events.stream().anyMatch(event -> event.type().equals("RAG_RERANK_SKIPPED")));
+        } finally { workflow.close(); }
+    }
+
+    @Test
     void supportedAnswerUsesTwoFixedModelCallsAndPersistsOnlyMetadataEvents() throws Exception {
         var answers = answers();
         var workflow = new KnowledgeChatWorkflow(answers);

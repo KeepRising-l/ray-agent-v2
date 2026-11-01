@@ -1,0 +1,17 @@
+.git
+.idea
+.ray-data
+logs
+**/target
+**/node_modules
+**/dist
+**/__pycache__
+**/.env
+**/.env.*
+**/application-local.*
+**/*.key
+**/*.pem
+**/*.p12
+**/*.pfx
+**/*.jks
+**/credentials.*

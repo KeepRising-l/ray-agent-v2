@@ -1,0 +1,28 @@
+{
+  "description": "自写近似规则集；每条规则事实不同。固定全部16个编号，不因结果删题。原有R05的20问另外回归。",
+  "rules": [
+    {"code":"AX-7100","days":30,"window":"周一01:00","action":"暂停新任务入口"},
+    {"code":"AX-7101","days":45,"window":"周二02:00","action":"检查备用水泵"},
+    {"code":"AX-7102","days":60,"window":"周三03:00","action":"清理暂存目录"},
+    {"code":"AX-7103","days":15,"window":"周四04:00","action":"核对冷库温度"},
+    {"code":"AX-7104","days":90,"window":"周五05:00","action":"更换传感器电池"},
+    {"code":"AX-7105","days":20,"window":"周六06:00","action":"检查阀门密封"},
+    {"code":"AX-7106","days":35,"window":"周日07:00","action":"复核巡检签名"},
+    {"code":"AX-7107","days":50,"window":"周一08:00","action":"校验压力读数"},
+    {"code":"BZ-4200","days":25,"window":"周二09:00","action":"核对门禁记录"},
+    {"code":"BZ-4201","days":40,"window":"周三10:00","action":"检查消防通道"},
+    {"code":"BZ-4202","days":55,"window":"周四11:00","action":"复核备份摘要"},
+    {"code":"BZ-4203","days":70,"window":"周五12:00","action":"校验库房照明"},
+    {"code":"BZ-4204","days":85,"window":"周六13:00","action":"检查防水围挡"},
+    {"code":"BZ-4205","days":100,"window":"周日14:00","action":"核对值班交接"},
+    {"code":"BZ-4206","days":115,"window":"周一15:00","action":"测试应急电源"},
+    {"code":"BZ-4207","days":130,"window":"周二16:00","action":"复核仓位标识"}
+  ],
+  "semanticCases": [
+    {"question":"维护时需要确认备用抽水设备，对应哪项规则？","code":"AX-7101"},
+    {"question":"哪项维护规则负责电力中断后的备用供电测试？","code":"BZ-4206"},
+    {"question":"我想检查出入权限的历史记录，应看哪项维护规则？","code":"BZ-4200"},
+    {"question":"冷藏区域的温度核验安排在哪个维护窗口？","code":"AX-7103"}
+  ],
+  "followups": ["AX-7100","AX-7105","BZ-4200","BZ-4207"]
+}

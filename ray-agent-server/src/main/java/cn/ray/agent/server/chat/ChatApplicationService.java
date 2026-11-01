@@ -125,6 +125,7 @@ public class ChatApplicationService {
         synchronized(settings.monitor()) {
             modelSettings.requireReady();run=store.run(owner.id(),runId);
             var channel=channels.select(run.channelId());var snapshot=snapshots.get(owner.id(),runId);
+            if(!snapshot.retrieval().equals(modelSettings.retrievalPolicy())) throw new ResponseStatusException(HttpStatus.CONFLICT,"原运行检索策略已变化，请取消后重新提问");
             if(!channel.version().equals(snapshot.channelVersion())) throw new ResponseStatusException(HttpStatus.CONFLICT,"原运行模型配置已变化，请恢复原配置或取消后重新提问");
             model=channels.adapter(channel);var session=store.session(owner.id(),run.sessionId());
             mode=ChatMode.parse(session.mode());scope=new ChatWorkflow.Scope(owner.id(),session.knowledgeBaseIds(),snapshot.policy());

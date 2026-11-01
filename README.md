@@ -1,6 +1,6 @@
 # RayAgent V2
 
-当前提供本机多轮聊天、网页工具、知识库问答与AUTO路由：支持文档入库/引用/生命周期、摘要投影、提问接续、有界队列与任务查询、整合后的会话工作区，以及R10个人登录和统一管理后台。尚未部署。
+当前提供本机多轮聊天、网页工具、知识库问答与AUTO路由：支持文档入库/引用/生命周期、摘要投影、提问接续、有界队列与任务查询、会话工作区、个人登录和管理后台。R11补充可关闭的检索实验、故障容量与交付验证；本机容器干净启动已验证，公开部署未验证。
 
 首版个人自用，提供三个模式：
 
@@ -134,7 +134,7 @@ ray.embedding.api-key=填写你自己的密钥
 
 顶部“任务与运行”查询当前owner的聊天与文档任务，可取消活动run、查看原会话、查询文档尝试记录，并重试最新失败/中断文档。文档临时Embedding失败默认最多自动重试2次，认证/格式/策略错误不自动重试。重启将遗留QUEUED/RUNNING聊天及处理中入库标记中断，不自动重放聊天；有效WAITING_USER仍可按原检查点回答。
 
-查询接口与能力边界、配置和复现命令见[队列与恢复验收](tests/acceptance/queue-and-recovery.md)。当前为单进程FIFO加持久状态，数据库单实例锁仍有效。R08初次因本机Embedding密钥删除收到401；2026-10-31用户提供新配置后，真实模型/Embedding/PG与浏览器复验通过。新增源码待用户阅读，登录与部署仍未实现。
+查询接口与能力边界、配置和复现命令见[队列与恢复验收](tests/acceptance/queue-and-recovery.md)。当前为单进程FIFO加持久状态，数据库单实例锁仍有效。R08初次因本机Embedding密钥删除收到401；2026-10-31用户提供新配置后，真实模型/Embedding/PG与浏览器复验通过。新增源码待用户阅读；个人登录已在R10补齐，本机容器启动在R11验证，公开部署仍待验收。
 
 ## 会话工作区与交互恢复（R09）
 
@@ -143,3 +143,19 @@ ray.embedding.api-key=填写你自己的密钥
 正文K/W引用可直接定位该回答所属运行的原文或网页来源，旧回答的来源不必通过运行编号猜选。文档页区分处理状态与上一有效版本，展示页段、尝试记录和失败入口。运行过程按事件序号去重，估算与供应商usage分开显示。
 
 网络结果不明确时先“查询本次请求”；原请求编号可在刷新浏览器后查回，避免盲目整轮重跑。模型失败可“编辑后重新提问”，该操作只回填输入；发送才创建新运行。文档仍按最新失败版本重试。设计与验收见[工作区说明](docs/r09-workspace-design.md)和[交互恢复验收](tests/acceptance/ui-recovery.md)。提交状态以Git历史为准，新增源码尚未学习。
+
+## 检索实验与启动交付（R11）
+
+向量检索仍为默认基线。关键词召回、RRF名次融合、受限多轮指代补全和当前模型候选重排均可关闭；在本机配置中修改并重启：
+
+```properties
+ray.rag.experimental.hybrid=false
+ray.rag.experimental.rewrite=false
+ray.rag.experimental.rerank=false
+```
+
+两路召回共用owner、知识库、有效版本及当前向量空间过滤。RRF不相加不同含义的分数，引用仍展示余弦值。改写仅补充最近用户问题，重排只接受已有候选编号的完整排列；失败回退原范围，预算不足跳过重排。策略保存进run快照，等待接续时策略不兼容返回409而不消费原问题。
+
+自写20题真实Embedding对照中，向量@6为19/20、融合20/20；这只是候选证据命中，小样本不作为默认启用依据或回答准确率。执行`python tools/verify_r11.py`做隔离模拟验证，`--live`使用本机真实模型/向量；比较API为已鉴权的`POST /api/admin/retrieval/compare`，每次可能产生一次Embedding用量。详见[检索对照](tests/evaluation/retrieval-comparison.md)与[质量报告](tests/evaluation/quality-report.md)。
+
+部署配置见[干净启动](docs/operations/clean-start.md)。Docker从源码构建前后端并放在同一个应用镜像，数据库和个人数据使用独立卷。`GET /api/health`只报告本进程与数据库就绪，不代表外部模型/向量在线。演示和故障处理分别见[演示脚本](docs/demo-script.md)、[恢复手册](docs/operations/recovery-playbook.md)；[贡献事实清单](docs/resume-claims.md)保留AI协作与用户尚未阅读的边界。

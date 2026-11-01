@@ -129,6 +129,8 @@ class PostgresRagTest {
         assertEquals(1, hits.size());
         assertEquals(own.id(), hits.get(0).versionId());
         assertEquals(1.0, hits.get(0).score(), .0001);
+        var literal = new KeywordRetriever(jdbc).search(new RetrievalQuery("资料 Pine42", new RetrievalFilter("owner-a", List.of(mine)),6,null),profile,new float[]{1,0,0});
+        assertEquals(List.of(own.id()), literal.stream().map(RetrievedChunk::versionId).toList());
         var service = new RetrievalService(documents, embedding(profile), vectors, "");
         assertThrows(ResponseStatusException.class, () -> service.retrieve("问题", new RetrievalFilter("owner-b", List.of(mine))));
     }

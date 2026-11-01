@@ -31,7 +31,7 @@ public class SecurityConfiguration {
     SecurityFilterChain security(HttpSecurity http) throws Exception {
         http.authorizeHttpRequests(auth -> auth
                 .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
-                .requestMatchers("/api/auth/session", "/api/auth/login").permitAll()
+                .requestMatchers("/api/auth/session", "/api/auth/login", "/api/health").permitAll()
                 .requestMatchers("/api/**").hasRole("OWNER").anyRequest().permitAll())
             .requestCache(cache -> cache.disable())
             .csrf(csrf -> csrf.csrfTokenRepository(new HttpSessionCsrfTokenRepository()))

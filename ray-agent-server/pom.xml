@@ -52,6 +52,14 @@
         </dependency>
     </dependencies>
     <build>
+        <resources>
+            <resource><directory>src/main/resources</directory></resource>
+            <!-- 发布构建把Vite产物放在target中；不把生成文件写回源码目录。 -->
+            <resource>
+                <directory>${project.build.directory}/generated-web</directory>
+                <targetPath>static</targetPath>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>

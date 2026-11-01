@@ -41,23 +41,11 @@ public class PgVectorStore implements VectorStore {
     }
 
     private String scopeSql(RetrievalFilter filter) {
-        return " FROM ra_chunk_vector x JOIN ra_document_chunk c ON c.id=x.chunk_id "
-                + "JOIN ra_document_version v ON v.id=c.version_id JOIN ra_document d ON d.id=v.document_id "
-                + "JOIN ra_knowledge_base k ON k.id=d.kb_id WHERE d.owner_id=? AND k.owner_id=? "
-                + "AND d.kb_id IN (" + String.join(",", java.util.Collections.nCopies(filter.knowledgeBaseIds().size(), "?")) + ") "
-                + "AND d.deleted_at IS NULL AND d.active_version_id=v.id AND v.status='READY' "
-                + "AND x.profile_id=? AND v.embedding_profile=? AND x.dimension=?";
+        return AuthorizedChunkSql.from(filter);
     }
 
     private java.util.ArrayList<Object> scopeArgs(RetrievalFilter filter, EmbeddingProfile profile) {
-        var args = new java.util.ArrayList<Object>();
-        args.add(filter.ownerId());
-        args.add(filter.ownerId());
-        args.addAll(filter.knowledgeBaseIds());
-        args.add(profile.id());
-        args.add(profile.id());
-        args.add(profile.dimension());
-        return args;
+        return AuthorizedChunkSql.args(filter, profile);
     }
 
     public boolean hasEligible(RetrievalFilter filter, EmbeddingProfile profile) {

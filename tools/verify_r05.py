@@ -251,7 +251,7 @@ try:
         if not args.live:
             session = send('/api/sessions', {'title': 'R05 cancel', 'mode': 'KNOWLEDGE', 'knowledgeBaseIds': [bases['orchard']]})['id']
             connection = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
-            connection.request('POST', '/api/chat/stream', body=json.dumps({'message': 'test-cancel', 'sessionId': session}), headers={'Content-Type': 'application/json'})
+            connection.request('POST', '/api/chat/stream', body=json.dumps({'message': 'test-cancel', 'sessionId': session}), headers={'Content-Type': 'application/json', **verification_headers()})
             response = connection.getresponse()
             while True:
                 line = response.readline().decode()

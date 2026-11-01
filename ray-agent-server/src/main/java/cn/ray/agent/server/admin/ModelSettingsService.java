@@ -24,12 +24,14 @@ public class ModelSettingsService {
     private final ModelChannelService channels;
     private final OpenAiEmbeddingClient embedding;
     private final Environment env;
+    private final cn.ray.agent.server.rag.retrieve.RetrievalExperimentPolicy retrievalPolicy;
     // 启动恢复配置完成后才允许接收新run；volatile让请求线程看到初始化结果。
     private volatile boolean ready;
 
     public ModelSettingsService(AdminSettingsStore store,LocalSecretStore secrets,ModelChannelService channels,
-                                OpenAiEmbeddingClient embedding,Environment env) {
+                                OpenAiEmbeddingClient embedding,Environment env,cn.ray.agent.server.rag.retrieve.RetrievalExperimentPolicy retrievalPolicy) {
         this.store=store;this.secrets=secrets;this.channels=channels;this.embedding=embedding;this.env=env;
+        this.retrievalPolicy=retrievalPolicy;
     }
     @EventListener(ApplicationReadyEvent.class)
     @Order(-100)
@@ -119,8 +121,9 @@ public class ModelSettingsService {
     public RunSnapshotService.Snapshot snapshot(ModelChannelService.ChannelView channel,RuntimePolicyService.Policy policy) {
         var definition=catalogue().channels().stream().filter(d->d.id().equals(channel.id())).findFirst().orElseThrow();
         return new RunSnapshotService.Snapshot(channel.id(),channel.model(),definition.baseUrl(),channel.version(),policy,
-                embedding.profile().id(),embedding.profile().model(),embedding.profile().dimension());
+                embedding.profile().id(),embedding.profile().model(),embedding.profile().dimension(),retrievalPolicy);
     }
+    public cn.ray.agent.server.rag.retrieve.RetrievalExperimentPolicy retrievalPolicy() { return retrievalPolicy; }
     public Map<String,Object> probeEmbedding() {
         synchronized(store.monitor()) { var vectors=embedding.embed(List.of("连接检查"));return Map.of("ok",true,"dimension",vectors.get(0).length); }
     }
