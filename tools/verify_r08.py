@@ -9,6 +9,8 @@ ROOT=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser()
 parser.add_argument('--live',action='store_true')
 parser.add_argument('--browser',action='store_true')
+parser.add_argument('--admin',action='store_true',help='在R08隔离环境中追加R10管理验收')
+parser.add_argument('--review',action='store_true',help='R10验收后保持隔离页面供独立UX走查')
 parser.add_argument('--skip-embedding',action='store_true',help='仅在真实模式中跳过未配置密钥的Embedding，单独记录聊天验证范围')
 args=parser.parse_args()
 assert not args.skip_embedding or args.live,'--skip-embedding only applies to --live'
@@ -88,6 +90,8 @@ env.update(SPRING_DATASOURCE_URL=db_url+separator+'currentSchema='+schema,
 settings=subprocess.run(['java','-XshowSettings:properties','-version'],capture_output=True,text=True)
 java=Path(re.search(r'java\.home\s*=\s*(.+)',settings.stderr).group(1).strip())/'bin/java.exe'
 process=None;frontend=None;keepalive=None;log=tempfile.TemporaryFile()
+from verification_auth import install
+verification_headers=install(f'http://127.0.0.1:{port}',env,storage)
 
 def sql(command):
     result=subprocess.run(['wsl','--exec','docker','exec','pgvector-db','psql','-U','postgres','-d','ray_agent_v2','-At','-c',command],check=True,capture_output=True)
@@ -277,6 +281,9 @@ try:
             'restartDoesNotReplay':True,'documentRetryAndAttempts':not args.skip_embedding,'sameRunResume':True,'browser':args.browser,
             'queueDeadlineMock':not args.live}
     (ROOT/'logs'/('r08-live.json' if args.live else 'r08-mock.json')).write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+    if args.admin:
+        from verify_r10 import verify
+        verify(globals())
 finally:
     for gate in gates.values(): gate.set()
     if frontend and frontend.poll() is None: frontend.terminate();frontend.wait(timeout=10)

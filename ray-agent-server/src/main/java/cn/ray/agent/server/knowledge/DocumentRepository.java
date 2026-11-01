@@ -57,9 +57,9 @@ public class DocumentRepository {
 
     public List<Document> documents(String owner, String kbId) {
         base(owner, kbId);
-        return jdbc.query("SELECT d.*,v.id AS version_id,v.status,v.error_message,v.chunk_count FROM ra_document d LEFT JOIN ra_document_version v ON v.document_id=d.id AND v.version=d.latest_version WHERE d.kb_id=? AND d.owner_id=? AND d.deleted_at IS NULL ORDER BY d.created_at DESC,d.id LIMIT 100", (r, n) ->
+        return jdbc.query("SELECT d.*,v.id AS version_id,v.status,v.error_message,v.chunk_count,(SELECT embedding_profile FROM ra_document_version WHERE id=d.active_version_id) AS index_profile FROM ra_document d LEFT JOIN ra_document_version v ON v.document_id=d.id AND v.version=d.latest_version WHERE d.kb_id=? AND d.owner_id=? AND d.deleted_at IS NULL ORDER BY d.created_at DESC,d.id LIMIT 100", (r, n) ->
                 new Document(r.getString("id"), r.getString("name"), r.getInt("latest_version"), r.getString("active_version_id"),
-                        r.getString("version_id"), r.getString("status"), r.getString("error_message"), r.getInt("chunk_count")), kbId, owner);
+                        r.getString("version_id"), r.getString("status"), r.getString("error_message"), r.getInt("chunk_count"),r.getString("index_profile")), kbId, owner);
     }
 
     private void requireDocument(String owner, String kb, String doc) {
@@ -284,7 +284,7 @@ public class DocumentRepository {
 
     public record KnowledgeBase(String id, String name, long createdAt) { }
     public record Document(String id, String name, int latestVersion, String activeVersionId, String versionId,
-                           String status, String errorMessage, int chunkCount) { }
+                           String status, String errorMessage, int chunkCount,String indexProfile) { }
     public record Version(String id, String documentId, int version, String sha256, int fileSize, String fileType,
                           String status, String parserVersion, String chunkPolicy, String embeddingProfile,
                           int chunkCount, String failureStage, String errorMessage, long createdAt, Long endedAt, String targetProfile) { }

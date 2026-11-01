@@ -1,6 +1,8 @@
+import { csrfHeaders, authRejected } from './auth.js'
 export async function knowledgeRequest(path = '', options) {
-  const response = await fetch('/api/knowledge-bases' + path, options)
+  const response = await fetch('/api/knowledge-bases' + path, { ...options, headers: { ...csrfHeaders(options?.method || 'GET'), ...options?.headers } })
   if (!response.ok) {
+    await authRejected(response.status)
     const error = await response.json().catch(() => ({}))
     throw new Error(error.message || `知识库操作失败（HTTP ${response.status}）`)
   }

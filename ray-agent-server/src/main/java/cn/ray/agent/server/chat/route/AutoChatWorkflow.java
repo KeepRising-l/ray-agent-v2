@@ -32,7 +32,7 @@ public class AutoChatWorkflow implements ChatWorkflow {
     public LlmAdapter bind(LlmAdapter model, Scope scope, RunBudget budget, Events events) {
         return runner.bind(model, budget, events, request -> execution -> {
             execution.event("ROUTE_STARTED", Map.of("hasKnowledgeScope", !scope.knowledgeBaseIds().isEmpty()));
-            var decision = router.decide(execution, !scope.knowledgeBaseIds().isEmpty());
+            var decision = router.decide(execution, !scope.knowledgeBaseIds().isEmpty(),scope.policy().classifierEnabled());
             trace.decision(execution, decision);
             switch (decision.target()) {
                 case CLARIFY -> {
@@ -70,7 +70,7 @@ public class AutoChatWorkflow implements ChatWorkflow {
                     }, events.metadata());
                     LlmAdapter child = decision.target() == RouteDecision.Target.KNOWLEDGE
                             ? knowledge.bind(execution.model, scope, childBudget, childEvents)
-                            : general.bind(execution.model, childBudget, childEvents, decision.target() == RouteDecision.Target.WEB);
+                            : general.bind(execution.model, childBudget, childEvents, decision.target() == RouteDecision.Target.WEB,scope.policy().tools());
                     execution.collect(child, request, true);
                     if (decision.target() == RouteDecision.Target.WEB && !attemptedWeb.get()) {
                         throw new GroundedAnswerService.Failure("WEB_NOT_EXECUTED", "模型没有执行本次要求的网页工具，回答未作为已核实结果保存");

@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -108,6 +109,11 @@ java = Path(re.search(r"java\.home\s*=\s*(.+)", settings.stderr).group(1).strip(
 process = None
 frontend = None
 log = tempfile.TemporaryFile()
+verification_root = ROOT / '.ray-data' / ('r03-check-' + uuid.uuid4().hex)
+from verification_auth import install
+verification_headers = install(f'http://127.0.0.1:{port}', env, verification_root)
+# 只维持本次WSL调用；不停止或重启全局WSL/Docker。
+wsl_keepalive = subprocess.Popen(['wsl', '--exec', 'sleep', '1800'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def get(path):
@@ -206,7 +212,7 @@ try:
         session = json.loads(post("/api/sessions", {"title": "R03 cancellation"}))["id"]
         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         connection.request("POST", "/api/chat/stream", body=json.dumps({"sessionId": session, "message": "cancel"}),
-                           headers={"Content-Type": "application/json"})
+                           headers={"Content-Type": "application/json", **verification_headers()})
         response = connection.getresponse()
         while True:
             line = response.readline().decode()
@@ -230,5 +236,12 @@ finally:
             process.wait(timeout=5)
     model.shutdown()
     model.server_close()
-    sql("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
-    log.close()
+    try:
+        sql("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
+    finally:
+        log.close()
+        assert verification_root.resolve().is_relative_to((ROOT / '.ray-data').resolve())
+        shutil.rmtree(verification_root, ignore_errors=True)
+        if wsl_keepalive.poll() is None:
+            wsl_keepalive.terminate()
+            wsl_keepalive.wait(timeout=10)

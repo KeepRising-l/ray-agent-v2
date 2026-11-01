@@ -15,6 +15,17 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ModelChannelServiceTest {
     @Test
+    void installingNewVersionDoesNotReplaceAdapterCapturedByExistingRun() {
+        var beans=new DefaultListableBeanFactory();
+        try(var service=new ModelChannelService(new ModelRegistry(),beans.getBeanProvider(OpenAiCompatibleAdapter.class),new MockEnvironment())) {
+            service.install(java.util.List.of(new ModelChannelService.RuntimeChannel("first","http://127.0.0.1:1234/v1","m1","test-key",true,"v1")),"first");
+            var old=service.select(null);var adapter=service.adapter(old);
+            service.install(java.util.List.of(new ModelChannelService.RuntimeChannel("first","http://127.0.0.1:1234/v1","m2","test-key",true,"v2")),"first");
+            assertSame(adapter,service.adapter(old));assertNotSame(adapter,service.adapter(service.select(null)));
+            assertEquals("m2",service.select(null).model());
+        }
+    }
+    @Test
     void selectsConfiguredChannelWithoutExposingCredentials() {
         var registry = new ModelRegistry();
         var beans = new DefaultListableBeanFactory();

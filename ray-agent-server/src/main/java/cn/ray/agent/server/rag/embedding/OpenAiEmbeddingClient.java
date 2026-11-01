@@ -8,8 +8,8 @@ import java.util.concurrent.*;
 
 /** 独立于聊天模型的兼容 Embeddings 客户端；按 index 还原批次顺序，失败不返回占位向量。 */
 public final class OpenAiEmbeddingClient implements EmbeddingClient, AutoCloseable {
-    private final EmbeddingProfile profile;
-    private final String key;
+    private volatile Settings settings;
+    private record Settings(EmbeddingProfile profile,String key) { }
     private final Duration timeout;
     private final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10))
             .followRedirects(HttpClient.Redirect.NEVER).build();
@@ -17,23 +17,25 @@ public final class OpenAiEmbeddingClient implements EmbeddingClient, AutoCloseab
     private final Set<CompletableFuture<?>> requests = ConcurrentHashMap.newKeySet();
 
     public OpenAiEmbeddingClient(EmbeddingProfile profile, String key, Duration timeout) {
-        this.profile = profile;
-        this.key = key;
+        this.settings = new Settings(profile,key);
         this.timeout = timeout;
     }
 
     @Override
     public EmbeddingProfile profile() {
-        return profile;
+        return settings.profile();
     }
 
     public boolean configured() {
-        return key != null && !key.isBlank();
+        return settings.key() != null && !settings.key().isBlank();
     }
 
     @Override
     public List<float[]> embed(List<String> texts) {
-        if (!configured()) {
+        var current = settings;
+        var profile = current.profile();
+        var key = current.key();
+        if (key == null || key.isBlank()) {
             throw new Failure("NOT_CONFIGURED", "Embedding 密钥尚未配置；配置后重启并重试文档");
         }
         if (texts.isEmpty() || texts.size() > 8 || texts.stream().anyMatch(text -> text == null || text.isBlank() || text.length() > 8000)) {
@@ -98,6 +100,11 @@ public final class OpenAiEmbeddingClient implements EmbeddingClient, AutoCloseab
                 future.cancel(true);
             }
         }
+    }
+
+    /** 只能由后台在无活动问答/入库时切换；每次HTTP调用仍独立捕获不可变配置。 */
+    public void replaceConfiguration(EmbeddingProfile profile,String key) {
+        settings = new Settings(profile,key);
     }
 
     @Override

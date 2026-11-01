@@ -1,3 +1,4 @@
+const { loginForVerification } = require('./browser_auth.cjs')
 /** 本机浏览器验收；由 verify_r03.py 启动隔离后端和前端，不操作用户的 IDEA 进程。 */
 const { chromium } = require('playwright')
 const assert = require('node:assert/strict')
@@ -8,6 +9,7 @@ async function main() {
   let page
   try {
     page = await browser.newPage()
+    await loginForVerification(page, process.argv[2])
     await page.goto(process.argv[2])
     await page.locator('#channel option').first().waitFor({ state: 'attached' })
     await page.locator('#message').fill(process.argv[3] === 'live'

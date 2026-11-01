@@ -1,6 +1,8 @@
 <script setup>
 import { onMounted, onUnmounted, ref } from 'vue'
-const emit = defineEmits(['open-session'])
+import { requestJson } from '../api/http.js'
+const props = defineProps({ admin: Boolean })
+const emit = defineEmits(['open-session', 'open-knowledge'])
 const tasks = ref([])
 const capacity = ref(null)
 const message = ref('')
@@ -12,15 +14,22 @@ let disposed = false
 let refreshing = false
 
 async function api(path, method = 'GET') {
-  const response = await fetch(path, { method })
-  if (!response.ok) throw new Error(`操作失败（HTTP ${response.status}）`)
-  return response.json()
+  return requestJson(path, { method })
+}
+const actionIds = new Map()
+async function act(task, action) {
+  const key = task.kind + task.id + action
+  if (!actionIds.has(key)) actionIds.set(key, crypto.randomUUID())
+  const result = await requestJson(`/api/admin/tasks/${task.kind}/${task.id}/actions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, requestId: actionIds.get(key) }) })
+  if (['FAILED', 'INTERRUPTED'].includes(result.status)) actionIds.delete(key)
+  if (result.status !== 'SUCCEEDED') throw new Error(`操作状态 ${result.status} · ${result.code || '请刷新操作记录'}`)
+  actionIds.delete(key)
 }
 async function refresh() {
   if (refreshing) return
   refreshing = true
   try {
-    const [list, limits] = await Promise.all([api('/api/tasks'), api('/api/tasks/capacity')])
+    const [list, limits] = await Promise.all([api(props.admin ? '/api/admin/tasks' : '/api/tasks'), api('/api/tasks/capacity')])
     if (!disposed) { tasks.value = list; capacity.value = limits }
   } catch (error) { if (!disposed) message.value = error.message }
   finally { refreshing = false }
@@ -28,7 +37,7 @@ async function refresh() {
 async function cancel(task) {
   if (pending.value) return
   pending.value = true
-  try { await api(`/api/runs/${task.id}/cancel`, 'POST'); message.value = '已请求取消'; await refresh() }
+  try { if (props.admin) await act(task, 'CANCEL'); else await api(`/api/runs/${task.id}/cancel`, 'POST'); message.value = '已请求取消'; await refresh() }
   catch (error) { message.value = error.message }
   finally { pending.value = false }
 }
@@ -36,7 +45,7 @@ async function retry(task) {
   if (pending.value) return
   pending.value = true
   try {
-    await api(`/api/knowledge-bases/${task.kbId}/documents/${task.documentId}/versions/${task.id}/retry`, 'POST')
+    if (props.admin) await act(task, 'RETRY'); else await api(`/api/knowledge-bases/${task.kbId}/documents/${task.documentId}/versions/${task.id}/retry`, 'POST')
     message.value = '已重新排入文档处理队列'
     await refresh()
   } catch (error) { message.value = error.message }
@@ -68,6 +77,7 @@ onUnmounted(() => { disposed = true; clearInterval(timer) })
       <button v-if="task.kind === 'RUN' && ['QUEUED', 'RUNNING', 'WAITING_USER'].includes(task.status)" :disabled="pending" @click="cancel(task)">取消运行</button>
       <button v-if="task.recovery === 'RETRY_DOCUMENT'" :disabled="pending" @click="retry(task)">重试文档</button>
       <button v-if="task.kind === 'DOCUMENT'" @click="inspect(task)">查看尝试记录</button>
+      <button v-if="admin && task.kind === 'DOCUMENT'" @click="emit('open-knowledge', { kbId: task.kbId, documentId: task.documentId, versionId: task.id })">查看文档与版本</button>
       <p v-if="task.kind === 'RUN' && task.status === 'INTERRUPTED'">进程中断；可查看历史后重新提问，本次运行不会自动重放。</p>
     </article>
     <details v-if="attempts.length" open>

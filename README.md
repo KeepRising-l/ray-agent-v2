@@ -1,6 +1,6 @@
 # RayAgent V2
 
-当前提供本机多轮聊天、网页工具、知识库问答与AUTO路由：支持文档入库/引用/生命周期、摘要投影、提问接续、有界队列与任务查询，以及整合后的会话工作区。登录与部署尚未实现。
+当前提供本机多轮聊天、网页工具、知识库问答与AUTO路由：支持文档入库/引用/生命周期、摘要投影、提问接续、有界队列与任务查询、整合后的会话工作区，以及R10个人登录和统一管理后台。尚未部署。
 
 首版个人自用，提供三个模式：
 
@@ -18,11 +18,19 @@
 
 后端通过环境变量 `RAY_MODEL_BASE_URL`、`RAY_MODEL_MODEL` 和 `RAY_MODEL_API_KEY` 可选装配 OpenAI Chat Completions 兼容适配器。Base URL 指向 `/v1` 层级，应用会追加 `/chat/completions`。缺少模型配置时不注册适配器；数据库连接仍必须正确配置；请勿将真实密钥写入仓库。
 
-可在根目录的本机配置中设置 `ray.model.extra-channels`（逗号分隔），并为每个名称设置 `ray.model.channel.<名称>.model`。额外渠道默认沿用主渠道的地址和密钥，也可以分别配置 `base-url` 和 `api-key`。聊天页按渠道选择模型；渠道名称与配置模型名不证明实际上游供应商身份。修改配置后需要重启后端。
+可在根目录的本机配置中设置 `ray.model.extra-channels`（逗号分隔），并为每个名称设置 `ray.model.channel.<名称>.model`。额外渠道默认沿用主渠道的地址和密钥，也可以分别配置 `base-url` 和 `api-key`。这些配置用于首次初始化；后台保存配置后，以数据库配置为准。后台可修改渠道、默认模型与开关，对新运行生效；已有运行保留快照。聊天页按渠道选择模型；渠道名称与配置模型名不证明实际上游供应商身份。
 
 调用的开始、结束和失败状态写入本机 `logs/ray-agent.log`；日志目录和本机模型配置均被 Git 忽略。当前记录用于本地诊断，不是数据库审计记录。
 
-开发阶段的聊天接口未鉴权，后端默认仅监听 127.0.0.1，暂不用于公开部署。手动真实接口探测需额外设置 `RAY_LIVE_TEST=true`，然后在工程根目录运行 `mvn -pl ray-agent-runtime -Dtest=LiveModelSmokeTest test`；默认构建会跳过此探测。探测会向所配置的模型发送一条测试消息，可能产生用量。
+所有业务API均要求个人账号登录，写操作还需CSRF令牌。后端默认仅监听127.0.0.1，暂不用于公开部署。手动真实接口探测需额外设置 `RAY_LIVE_TEST=true`，然后在工程根目录运行 `mvn -pl ray-agent-runtime -Dtest=LiveModelSmokeTest test`；默认构建会跳过此探测。探测会向所配置的模型发送一条测试消息，可能产生用量。
+
+## 个人登录与管理后台（R10）
+
+首次以工程根目录启动后端，会在受Git忽略的 `.ray-data/identity/initial-login.txt` 生成账号 `owner` 和随机初始密码，请在本机打开该文件查看。账号的BCrypt散列保存在同目录 `owner.properties`，重启不会重新生成密码；不要将两个文件提交到Git。保存好登录凭据后可删除初始明文文件，账号仍可使用。若需重置，先停止后端，备份并移走这两个身份文件，再启动生成新账号；业务数据仍属于原来的个人owner。
+
+登录后点击“管理后台”，可以管理模型渠道、向量配置、知识库、任务补偿、工具与路由策略，并查看运行快照、用量和操作记录。密钥输入留空表示保留，明确勾选才清空，接口只返回是否配置；后台录入的密钥仅保存在受忽略的 `.ray-data/admin/secrets.properties`，数据库保存引用。该文件是本机明文配置，当前没有密钥加密服务。备份需同时保留数据库、身份文件、密钥文件及原文目录。
+
+修改Embedding前必须结束活动问答、等待补充与文档处理；新向量空间不会复用旧索引，需要逐文档明确重建。R10之前没有配置快照的待补充运行，不能宣称可按原配置接续，应取消后重新提问。详见[后台设计](docs/r10-admin-design.md)与[后台验收](tests/acceptance/admin-console.md)。
 
 ## 运行最小聊天
 
@@ -32,7 +40,7 @@
 
 本机连接放在根目录被 Git 忽略的 `application-local.properties`：`spring.datasource.url`、`spring.datasource.username`、`spring.datasource.password`。当前使用独立数据库 `ray_agent_v2`；Spring 启动时执行 `schema.sql` 初始化 `ra_session`、`ra_run`、`ra_message`、`ra_event` 表。此初始化脚本不替代后续正式版本迁移。
 
-登录前的 owner 由服务端固定为 `local-owner`，不接收前端自定义身份；当前仅支持本机开发，尚无多用户认证。一个数据库 schema 只允许一个运行实例，避免启动恢复影响另一实例。
+已登录的唯一个人账号由服务端绑定为 `local-owner`，不接收前端自定义身份；保留既有个人数据，不等于已支持多用户。异步任务继续使用服务端绑定的owner。一个数据库 schema 只允许一个运行实例，避免启动恢复影响另一实例。
 
 运行有 `RUNNING`、`SUCCEEDED`、`FAILED`、`CANCELLED`、`TIMED_OUT`、`INTERRUPTED` 状态。已收到的部分回答在终态时保存，进程异常退出前未落库的输出可能丢失；重启后仅标记旧运行中断，不自动重放。输入估算与供应商实际用量分别展示，缺失用量保留为空。
 
@@ -78,7 +86,7 @@ ray.embedding.api-key=填写你自己的密钥
 
 数据库初始化显式加载 `schema.sql`、`db/migration/V004__knowledge_document.sql`、`V005__document_chunk_vector.sql` 和 `V006__knowledge_chat_lifecycle.sql`，在本项目数据库的 public schema 安装 vector 扩展。SQL 文件可重复执行，当前仍使用 Spring SQL 初始化，并未启用 Flyway 的版本迁移机制。向量列用 [pgvector 的 vector 类型](https://github.com/pgvector/pgvector#can-i-store-vectors-with-different-dimensions-in-the-same-column)，通过 profile 和维度限制写入；检索在计算距离前限定 owner、知识库、有效版本与当前向量空间。
 
-接口入口为 `/api/knowledge-bases`，包含建库、文档上传、版本列表/状态/片段、向量数量与失败重试。服务端仍固定绑定本机 owner；保留所有权约束不等于已经有登录或多用户认证。R05增加文档删除和逐文档索引重建，批量全量重建后续再接。
+接口入口为 `/api/knowledge-bases`，包含建库、文档上传、版本列表/状态/片段、向量数量与失败重试。接口要求登录，服务端绑定个人owner；保留所有权约束不等于已实现多用户。R05增加文档删除和逐文档索引重建，批量全量重建后续再接。
 
 验证说明见 [文档入库验收](tests/acceptance/document-ingestion.md)。先完成 `mvn package` 再运行 `python tools/verify_r04.py`，默认是模拟 Embedding＋真实 PostgreSQL/pgvector；添加 `--live` 使用本机真实 Embedding，添加 `--browser --live` 验证真实上传、PDF 页码、刷新及失败展示。测试资料均为自写，测试只清理自己的随机 schema 和 `.ray-data/r04-check-*` 目录。
 

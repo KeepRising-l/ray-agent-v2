@@ -1,3 +1,4 @@
+const { loginForVerification } = require('./browser_auth.cjs')
 const { chromium } = require('playwright')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
@@ -7,6 +8,7 @@ async function main() {
   let page
   try {
     page = await browser.newPage()
+    await loginForVerification(page, process.argv[2])
     await page.goto(process.argv[2])
     await page.locator('#channel option').first().waitFor({ state: 'attached' })
     await page.locator('#new-mode').selectOption('AUTO')

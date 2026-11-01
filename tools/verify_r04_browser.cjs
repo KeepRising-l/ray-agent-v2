@@ -1,3 +1,4 @@
+const { loginForVerification } = require('./browser_auth.cjs')
 const { chromium } = require('playwright')
 const assert = require('node:assert/strict')
 const path = require('node:path')
@@ -8,6 +9,7 @@ async function main() {
   let page
   try {
     page = await browser.newPage()
+    await loginForVerification(page, process.argv[2])
     await page.goto(process.argv[2])
     await page.getByRole('button', { name: '知识库管理', exact: true }).click()
     await page.locator('#kb-name').fill('R04 browser test')

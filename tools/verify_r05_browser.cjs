@@ -1,3 +1,4 @@
+const { loginForVerification } = require('./browser_auth.cjs')
 const { chromium } = require('playwright')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
@@ -8,6 +9,7 @@ async function main() {
   try {
     page = await browser.newPage()
     const base = process.argv[2]
+    await loginForVerification(page, process.argv[2])
     await page.goto(base)
     await page.locator('#channel option').first().waitFor({ state: 'attached' })
     await page.locator('#new-mode').selectOption('KNOWLEDGE')
@@ -34,7 +36,8 @@ async function main() {
     await page.locator('.citation-card pre').first().waitFor()
     fs.mkdirSync('logs', { recursive: true })
     await page.screenshot({ path: 'logs/r05-browser.png', fullPage: true })
-    const deletion = await page.request.delete(base + `/api/knowledge-bases/${source.kbId}/documents/${source.documentId}`)
+    const csrf = await (await page.request.get(base+'/api/auth/session')).json()
+    const deletion = await page.request.delete(base + `/api/knowledge-bases/${source.kbId}/documents/${source.documentId}`, { headers: { [csrf.csrfHeader]: csrf.csrfToken } })
     assert.ok(deletion.ok())
     await page.locator('.citation-card').filter({ hasText: '回答已引用' }).first().getByRole('button').click()
     await page.getByText('引用已失效：资料已更新或删除。', { exact: true }).waitFor()

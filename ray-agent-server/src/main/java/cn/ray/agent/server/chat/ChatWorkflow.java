@@ -10,7 +10,8 @@ import java.util.function.Consumer;
 public interface ChatWorkflow {
     LlmAdapter bind(LlmAdapter model, Scope scope, RunBudget budget, Events events);
 
-    record Scope(String ownerId, List<String> knowledgeBaseIds) {
+    record Scope(String ownerId, List<String> knowledgeBaseIds, cn.ray.agent.server.admin.RuntimePolicyService.Policy policy) {
+        public Scope(String ownerId,List<String> knowledgeBaseIds) { this(ownerId,knowledgeBaseIds,cn.ray.agent.server.admin.RuntimePolicyService.Policy.defaults()); }
         public Scope {
             knowledgeBaseIds = List.copyOf(knowledgeBaseIds);
         }

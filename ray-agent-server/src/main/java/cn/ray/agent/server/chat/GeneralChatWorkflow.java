@@ -17,11 +17,16 @@ public class GeneralChatWorkflow implements ChatWorkflow {
 
     @Override
     public LlmAdapter bind(LlmAdapter model, Scope scope, RunBudget budget, Events events) {
-        return bind(model, budget, events, true);
+        return bind(model, budget, events, true, scope.policy().tools());
     }
 
     public LlmAdapter bind(LlmAdapter model, RunBudget budget, Events events, boolean allowWeb) {
-        var workflow = agent.bind(model, allowWeb ? Set.of("web_search", "web_fetch", "ask_user") : Set.of("ask_user"), budget, events.tools());
+        return bind(model,budget,events,allowWeb,Set.of("web_search","web_fetch","ask_user"));
+    }
+
+    public LlmAdapter bind(LlmAdapter model, RunBudget budget, Events events, boolean allowWeb,Set<String> tools) {
+        var allowed = allowWeb ? tools : Set.of("ask_user");
+        var workflow = agent.bind(model, allowed, budget, events.tools());
         return request -> workflow.generate(request(request, allowWeb));
     }
 

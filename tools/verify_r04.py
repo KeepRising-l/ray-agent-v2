@@ -103,6 +103,8 @@ java = Path(re.search(r'java\.home\s*=\s*(.+)', settings.stderr).group(1).strip(
 process = None
 frontend = None
 log = tempfile.TemporaryFile()
+from verification_auth import install
+verification_headers=install(f'http://127.0.0.1:{port}',env,storage)
 
 
 def get(path):

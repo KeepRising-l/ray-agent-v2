@@ -3,6 +3,17 @@ import { onMounted, onUnmounted, ref } from 'vue'
 import { knowledgeRequest as api, documentStates, isProcessing } from '../api/knowledge.js'
 import { requestJson } from '../api/http.js'
 import DocumentStatusList from '../components/DocumentStatusList.vue'
+const props = defineProps({ admin: Boolean, initialTarget: Object })
+const actionIds = new Map()
+async function adminAction(action) {
+  const key = versionId.value + action
+  if (!actionIds.has(key)) actionIds.set(key, crypto.randomUUID())
+  const result = await requestJson(`/api/admin/tasks/DOCUMENT/${versionId.value}/actions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, requestId: actionIds.get(key) }) })
+  if (['FAILED', 'INTERRUPTED'].includes(result.status)) actionIds.delete(key)
+  if (result.status !== 'SUCCEEDED') throw new Error(`后台操作 ${result.status} · ${result.code || '请刷新操作记录'}`)
+  actionIds.delete(key)
+  return result.result_id
+}
 
 const bases = ref([])
 const kb = ref('')
@@ -159,7 +170,7 @@ async function upload(asVersion = false) {
 async function retry() {
   busy.value = true
   try {
-    await api(`${docPath()}/versions/${versionId.value}/retry`, { method: 'POST' })
+    if (props.admin) await adminAction('RETRY'); else await api(`${docPath()}/versions/${versionId.value}/retry`, { method: 'POST' })
     trackedVersion.value = versionId.value
     status.value = '已重新排入处理队列'
     await refresh(true)
@@ -169,7 +180,7 @@ async function retry() {
 async function reindex() {
   busy.value = true
   try {
-    const version = await api(`${docPath()}/reindex`, { method: 'POST' })
+    const version = props.admin ? (await api(`${docPath()}/versions/${await adminAction('REINDEX')}`)).version : await api(`${docPath()}/reindex`, { method: 'POST' })
     trackedVersion.value = version.id
     status.value = '已创建新的索引版本，旧有效版本会保留到重建完成'
     await refresh(true)
@@ -183,7 +194,7 @@ async function removeDocument() {
   if (!window.confirm('删除此文档及其索引？历史引用将失效。')) return
   busy.value = true
   try {
-    await api(docPath(), { method: 'DELETE' })
+    if (props.admin) await adminAction('DELETE'); else await api(docPath(), { method: 'DELETE' })
     selectedDocument.value = null
     detail.value = null
     chunks.value = []
@@ -198,8 +209,14 @@ onMounted(async () => {
   try {
     embedding.value = await api('/embedding')
     bases.value = await api()
-    kb.value = bases.value.find(base => base.id === localStorage.getItem('ray-kb'))?.id || bases.value[0]?.id || ''
+    kb.value = props.initialTarget?.kbId || bases.value.find(base => base.id === localStorage.getItem('ray-kb'))?.id || bases.value[0]?.id || ''
     await selectBase()
+    if (disposed) return
+    if (props.initialTarget) {
+      const doc = documents.value.find(item => item.id === props.initialTarget.documentId)
+      if (doc) { await selectDocument(doc); versionId.value = props.initialTarget.versionId; await loadVersion() }
+    }
+    if (disposed) return
     poll = setInterval(async () => {
       if (!busy.value && kb.value) {
         try { await refresh() } catch { status.value = '无法更新文档状态，请检查后端' }
@@ -236,17 +253,18 @@ onUnmounted(() => {
       <button v-if="selectedDocument" type="button" :disabled="busy || !file" @click="upload(true)">作为选中文档的新版本</button>
     </form>
     <p role="status">{{ status }}</p>
-    <DocumentStatusList :documents="documents" :busy="busy" :selected="selectedDocument?.id" @select="selectDocument" />
+    <DocumentStatusList :documents="documents" :busy="busy" :selected="selectedDocument?.id" :current-profile="embedding?.profileId" @select="selectDocument" />
     <section v-if="detail" aria-label="文档版本详情">
       <h3>{{ selectedDocument.name }}</h3>
-      <button :disabled="busy || isProcessing(selectedDocument.status)" @click="reindex">重建索引</button>
+      <button :disabled="busy || isProcessing(selectedDocument.status) || versionId !== versions[0]?.id" @click="reindex">重建索引</button>
       <button :disabled="busy" @click="removeDocument">删除文档</button>
       <label for="document-version">版本</label>
       <select id="document-version" v-model="versionId" :disabled="busy" @change="loadVersion">
         <option v-for="version in versions" :key="version.id" :value="version.id">v{{ version.version }} · {{ documentStates[version.status] }}</option>
       </select>
       <p>{{ documentStates[detail.version.status] }} · {{ detail.version.chunkCount }} 个片段 · 已保存 {{ detail.vectorCount }} 条向量</p>
-      <p v-if="selectedDocument.activeVersionId === versionId">此版本为当前有效版本。</p>
+      <p v-if="selectedDocument.activeVersionId === versionId && (!embedding?.profileId || detail.version.embeddingProfile === embedding.profileId)">此版本为当前有效版本。</p>
+      <p v-else-if="selectedDocument.activeVersionId === versionId">当前向量空间已变化，此版本需要重建索引后才可用于问答。</p>
       <p v-else-if="selectedDocument.activeVersionId">较早的就绪版本仍有效，本版本尚未替换它。</p>
       <p v-if="detail.version.errorMessage">{{ detail.version.failureStage }}：{{ detail.version.errorMessage }}</p>
       <button v-if="['FAILED', 'INTERRUPTED'].includes(detail.version.status) && versionId === versions[0]?.id" :disabled="busy" @click="retry">重试处理</button>

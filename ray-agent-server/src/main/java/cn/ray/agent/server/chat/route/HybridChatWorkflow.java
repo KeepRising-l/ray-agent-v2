@@ -51,14 +51,14 @@ public class HybridChatWorkflow {
         var web = new ArrayList<ToolResult>();
         var sources = new LinkedHashMap<String, ToolResult.Source>();
         String webStatus = "BUDGET_DISABLED";
-        if (execution.budget.toolCalls() > 0) {
+        if (execution.budget.toolCalls() > 0 && scope.policy().searchEnabled()) {
             // 不发送检索结果/历史到搜索服务，只使用本次用户主动发来的问题，长度受工具 schema 限制。
             String query = question.substring(0, question.offsetByCodePoints(0, Math.min(150, question.codePointCount(0, question.length()))));
-            var searched = tool(execution, "web_search", Map.of("query", query), sources, 1);
+            var searched = tool(execution, "web_search", Map.of("query", query), sources, 1,scope.policy().tools());
             web.add(searched);
             webStatus = searched.code();
-            if (searched.success() && !searched.sources().isEmpty() && execution.budget.toolCalls() > 1) {
-                web.add(tool(execution, "web_fetch", Map.of("url", searched.sources().get(0).url()), sources, 2));
+            if (searched.success() && !searched.sources().isEmpty() && execution.budget.toolCalls() > 1 && scope.policy().fetchEnabled()) {
+                web.add(tool(execution, "web_fetch", Map.of("url", searched.sources().get(0).url()), sources, 2,scope.policy().tools()));
             }
         }
         var plan = new HybridEvidencePlan(evidence, web, knowledgeStatus, webStatus);
@@ -81,12 +81,12 @@ public class HybridChatWorkflow {
     }
 
     private ToolResult tool(WorkflowRunner.Session execution, String name, Map<String, String> arguments,
-                            Map<String, ToolResult.Source> sources, int step) throws java.io.IOException {
+                            Map<String, ToolResult.Source> sources, int step,Set<String> allowed) throws java.io.IOException {
         execution.remaining();
         String callId = UUID.randomUUID().toString();
         execution.events.tools().accept(new AgentEventSink.Event("TOOL_STARTED", step, callId, name, "", 0, List.of()));
         long start = System.nanoTime();
-        var result = tools.execute(new ToolCall(callId, name, mapper.writeValueAsString(arguments)), Set.of("web_search", "web_fetch"),
+        var result = tools.execute(new ToolCall(callId, name, mapper.writeValueAsString(arguments)), allowed,
                 execution.cancellation, Math.min(execution.remaining(), execution.budget.toolTimeoutMs()));
         execution.remaining();
         var assigned = new ArrayList<ToolResult.Source>();

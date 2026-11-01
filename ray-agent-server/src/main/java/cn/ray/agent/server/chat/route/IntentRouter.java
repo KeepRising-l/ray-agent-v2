@@ -20,11 +20,15 @@ public class IntentRouter {
     }
 
     public RouteDecision decide(WorkflowRunner.Session execution, boolean hasScope) throws Exception {
+        return decide(execution,hasScope,true);
+    }
+    public RouteDecision decide(WorkflowRunner.Session execution, boolean hasScope,boolean classifierEnabled) throws Exception {
         String question = question(execution.base);
         var rule = policy.rule(question, hasScope);
         if (rule.isPresent()) {
             return rule.get();
         }
+        if(!classifierEnabled) return policy.fallback();
         execution.event("ROUTE_CLASSIFIER_STARTED", Map.of());
         try {
             String output = execution.collect(execution.model, request(execution.base, hasScope), false).message().content();

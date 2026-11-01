@@ -1,3 +1,4 @@
+const { loginForVerification } = require('./browser_auth.cjs')
 const { chromium } = require('playwright')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
@@ -5,6 +6,7 @@ async function main() {
   const browser = await chromium.launch({ headless: true, executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe' })
   const page = await browser.newPage()
   try {
+    await loginForVerification(page, process.argv[2])
     await page.goto(process.argv[2])
     await page.getByRole('button', { name: '任务与运行', exact: true }).click()
     const queued = page.locator('.task-card').filter({ hasText: process.argv[3] })

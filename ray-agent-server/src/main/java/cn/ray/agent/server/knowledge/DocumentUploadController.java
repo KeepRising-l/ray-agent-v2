@@ -46,7 +46,7 @@ public class DocumentUploadController {
     @GetMapping("/embedding")
     public Map<String, Object> embedding() {
         return Map.of("configured", embedding.configured(), "model", embedding.profile().model(),
-                "dimension", embedding.profile().dimension());
+                "dimension", embedding.profile().dimension(),"profileId",embedding.profile().id());
     }
 
     @GetMapping("/{kb}/documents")

@@ -59,9 +59,10 @@ export function createChatSession({ api = requestJson, stream = streamChat, answ
   }
   async function refresh() {
     const token = selection; const sid = state.sessionId; const sequence = ++refreshId
-    const [sessions, bases] = await Promise.all([api('/api/sessions'), api('/api/knowledge-bases')])
+    const [sessions, bases, channels] = await Promise.all([api('/api/sessions'), api('/api/knowledge-bases'), api('/api/model-channels')])
     if (disposed || token !== selection || sequence !== refreshId) return
-    state.sessions = sessions; state.bases = bases
+    state.sessions = sessions; state.bases = bases; state.channels = channels
+    if (!channels.some(channel => channel.id === state.channelId)) state.channelId = channels[0]?.id || ''
     if (!sid) return
     const [messages, runs] = await Promise.all([api(`/api/sessions/${sid}/messages`), api(`/api/sessions/${sid}/runs`)])
     if (disposed || token !== selection || sequence !== refreshId) return
@@ -110,7 +111,7 @@ export function createChatSession({ api = requestJson, stream = streamChat, answ
     try {
       const created = await api('/api/sessions', post({ title: state.title.trim() || (state.newMode === 'CHAT' ? '新会话' : `${state.newMode}会话`),
         mode: state.newMode, knowledgeBaseIds: state.newMode === 'CHAT' ? [] : [...state.newBases] }))
-      state.title = ''; await select(created.id); return true
+      state.title = ''; await select(created.id); state.channelId = state.channels[0]?.id || ''; return true
     } catch (error) { state.error = errorNotice(error); return false }
     finally { state.creating = false }
   }
@@ -162,9 +163,10 @@ export function createChatSession({ api = requestJson, stream = streamChat, answ
       notice.uncertain = !terminal && error.name !== 'AbortError'
       if (error.runId) op.runId = error.runId
       if (error.name === 'AbortError') notice.message = '连接已关闭，请刷新确认运行状态。'
+      status(notice.uncertain ? '请求结果尚未确认' : '本次请求未完成，请查看原因')
       const partial = op.view.text ? { runId: op.runId, text: op.view.text } : null
       const pending = question || error.runId ? null : payload
-      notices.set(sid, { error: notice, pending, partial })
+      notices.set(sid, { error: notice, pending, partial, status: op.view.status })
       if (terminal) forgetPending(sid)
       if (visible()) {
         state.error = notice; state.partial = partial

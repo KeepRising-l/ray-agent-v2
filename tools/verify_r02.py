@@ -79,6 +79,8 @@ if not java_home:
 java = Path(java_home) / "bin" / "java.exe"
 process = None
 logs = tempfile.TemporaryFile()
+from verification_auth import install
+verification_headers=install(f'http://127.0.0.1:{port}',env,ROOT/'.ray-data/r02-auth')
 
 def start():
     global process
@@ -100,7 +102,7 @@ def get(path):
         return json.load(response)
 
 def post(path, body):
-    request = urllib.request.Request(f"http://127.0.0.1:{port}" + path, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+    request = urllib.request.Request(f"http://127.0.0.1:{port}" + path, data=json.dumps(body).encode(), headers={**verification_headers(), "Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=8) as response:
         return response.read().decode()
 
@@ -109,7 +111,7 @@ def stream(session, text, key):
 
 def open_stream(session, text, key):
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=8)
-    connection.request("POST", "/api/chat/stream", body=json.dumps({"message": text, "sessionId": session, "clientRequestId": key}), headers={"Content-Type": "application/json"})
+    connection.request("POST", "/api/chat/stream", body=json.dumps({"message": text, "sessionId": session, "clientRequestId": key}), headers={**verification_headers(), "Content-Type": "application/json"})
     response = connection.getresponse()
     while True:
         line = response.readline().decode()

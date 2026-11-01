@@ -22,6 +22,7 @@ public class DocumentIngestionService {
     private final EmbeddingClient embedding;
     private final DocumentDeleteService deletion;
     private cn.ray.agent.server.task.RetryScheduler retries;
+    private cn.ray.agent.server.admin.AdminSettingsStore settings;
     private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor(task -> {
         Thread thread = new Thread(task, "document-ingestion");
         thread.setDaemon(true);
@@ -44,9 +45,11 @@ public class DocumentIngestionService {
 
     @org.springframework.beans.factory.annotation.Autowired
     public DocumentIngestionService(DocumentRepository store,DocumentFileStore files,ParserSelector parsers,
-            EmbeddingClient embedding,DocumentDeleteService deletion,cn.ray.agent.server.task.RetryScheduler retries) {
+            EmbeddingClient embedding,DocumentDeleteService deletion,cn.ray.agent.server.task.RetryScheduler retries,
+            cn.ray.agent.server.admin.AdminSettingsStore settings) {
         this(store,files,parsers,embedding,deletion);
         this.retries=retries;
+        this.settings=settings;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -61,9 +64,14 @@ public class DocumentIngestionService {
         try {
             deletion.cleanup();
             if(retries!=null){retries.tick();}
-            var work = store.claim(embedding.profile().id());
+            DocumentRepository.Work work;
+            synchronized(settings==null?this:settings.monitor()) {
+                work=store.claim(embedding.profile().id());
+                if(work!=null && settings!=null) settings.documentStarted();
+            }
             if (work != null) {
-                process(work);
+                try {process(work);}
+                finally {if(settings!=null) synchronized(settings.monitor()){settings.documentFinished();}}
             }
         } catch (RuntimeException e) {
             org.slf4j.LoggerFactory.getLogger(getClass()).warn("文档任务轮询失败，请检查数据库状态");

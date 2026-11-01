@@ -13,6 +13,7 @@ import cn.ray.agent.server.conversation.ConversationRepository;
 import cn.ray.agent.server.conversation.LocalOwner;
 import cn.ray.agent.server.model.ModelChannelService;
 import cn.ray.agent.server.run.RunDispatcher;
+import cn.ray.agent.server.admin.*;
 import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -41,11 +42,11 @@ public class ChatApplicationService {
     private final PendingQuestionStore questions;
     private final RunResumeService resumes;
     private final RagStreamEventMapper ragEvents;
-    private final long timeoutMs;
+    private final AdminSettingsStore settings;
+    private final ModelSettingsService modelSettings;
+    private final RuntimePolicyService policies;
+    private final RunSnapshotService snapshots;
     // 多次模型生成仍属于同一个 run；最后一步也占一次模型预算。
-    private final int maxModelSteps;
-    private final int maxToolCalls;
-    private final long toolTimeoutMs;
     private final ConcurrentMap<String, ChatRun> active = new ConcurrentHashMap<>();
     private final ScheduledThreadPoolExecutor timers = new ScheduledThreadPoolExecutor(1, task -> {
         Thread thread = new Thread(task, "run-deadlines");
@@ -59,14 +60,8 @@ public class ChatApplicationService {
                                   cn.ray.agent.server.conversation.SessionRegistry registry,
                                   @Value("${ray.run.queue-timeout-ms:30000}") long queueTimeoutMs,
                                   PendingQuestionStore questions, RunResumeService resumes,
-                                  RagStreamEventMapper ragEvents,
-                                  @Value("${ray.run.timeout-ms:60000}") long timeoutMs,
-                                  @Value("${ray.run.max-model-steps:5}") int maxModelSteps,
-                                  @Value("${ray.run.max-tool-calls:6}") int maxToolCalls,
-                                  @Value("${ray.run.tool-timeout-ms:15000}") long toolTimeoutMs) {
-        if (timeoutMs < 100 || timeoutMs > 600_000) {
-            throw new IllegalArgumentException("run timeout must be between 100 and 600000 ms");
-        }
+                                  RagStreamEventMapper ragEvents, AdminSettingsStore settings, ModelSettingsService modelSettings,
+                                  RuntimePolicyService policies, RunSnapshotService snapshots) {
         this.channels = channels;
         this.store = store;
         this.owner = owner;
@@ -80,11 +75,7 @@ public class ChatApplicationService {
         this.questions = questions;
         this.resumes = resumes;
         this.ragEvents = ragEvents;
-        this.timeoutMs = timeoutMs;
-        new RunBudget(maxModelSteps, maxToolCalls, timeoutMs, toolTimeoutMs, 24000);
-        this.maxModelSteps = maxModelSteps;
-        this.maxToolCalls = maxToolCalls;
-        this.toolTimeoutMs = toolTimeoutMs;
+        this.settings=settings; this.modelSettings=modelSettings; this.policies=policies; this.snapshots=snapshots;
         timers.setRemoveOnCancelPolicy(true);
         timers.scheduleAtFixedRate(() -> {
             try { questions.expire(); } catch (RuntimeException ignored) { /* 数据库暂不可用时下轮再查，不终止清理调度。 */ }
@@ -93,44 +84,56 @@ public class ChatApplicationService {
 
     /** sessionId 是会话；clientRequestId 识别重复提交；runId 由服务端单独生成。 */
     public SseEmitter stream(String message, String channelId, String sessionId, String clientRequestId) {
-        var channel = channels.select(channelId);
-        String session = sessionId == null ? store.create(owner.id(), message.substring(0, Math.min(30, message.length()))).id() : sessionId;
-        String requestId = clientRequestId == null ? UUID.randomUUID().toString() : clientRequestId;
-        var sessionInfo = store.session(owner.id(), session);
-        ChatMode mode = ChatMode.parse(sessionInfo.mode());
-        idempotency.assertNew(owner.id(),session,requestId,message,channel.id());
-        var permit=capacity.reserve(owner.id());
         ConversationRepository.Run run;
-        try {run=store.beginQueued(owner.id(),session,requestId,channel.id(),channel.model(),message);}
-        catch(RuntimeException error){permit.close();throw error;}
-        GenerateRequest request = new GenerateRequest(java.util.List.of(
-                new Message(Message.Role.SYSTEM, "会话模式：" + mode + "。历史不能扩大模式权限。"),
-                new Message(Message.Role.USER, message)), new GenerateOptions(null, null, 2048), java.util.List.of());
-        var budget = budget();
-        var scope = new ChatWorkflow.Scope(owner.id(), sessionInfo.knowledgeBaseIds());
-        return execute(run, budget, null, permit, request, events -> preparation.bind(channels.adapter(channel), session,
-                run.id(), mode, scope, budget, events));
-    }
-
-    /** 回答不创建新run；消费questionId后从保存的检查点接续原run。 */
-    public SseEmitter resume(String runId, String questionId, String answer) {
-        var run = store.run(owner.id(), runId);
-        var channel = channels.select(run.channelId());
-        if (!channel.model().equals(run.configuredModel())) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "原运行的模型配置已改变，请恢复原配置或取消该运行");
+        GenerateRequest request;
+        RunBudget budget;
+        ChatMode mode;
+        ChatWorkflow.Scope scope;
+        LlmAdapter model;
+        cn.ray.agent.server.run.BoundedRunExecutor.Permit permit;
+        synchronized(settings.monitor()) {
+            modelSettings.requireReady();
+            var channel=channels.select(channelId);
+            model=channels.adapter(channel);
+            String session=sessionId==null?store.create(owner.id(),message.substring(0,Math.min(30,message.length()))).id():sessionId;
+            String requestId=clientRequestId==null?UUID.randomUUID().toString():clientRequestId;
+            var sessionInfo=store.session(owner.id(),session);
+            mode=ChatMode.parse(sessionInfo.mode());
+            var policy=policies.current();
+            if(mode==ChatMode.AUTO && !policy.autoEnabled()) throw new ResponseStatusException(HttpStatus.CONFLICT,"AUTO已停用，请调整策略或新建其他模式会话");
+            idempotency.assertNew(owner.id(),session,requestId,message,channel.id());
+            permit=capacity.reserve(owner.id());
+            try {run=snapshots.begin(owner.id(),modelSettings.snapshot(channel,policy),
+                    ()->store.beginQueued(owner.id(),session,requestId,channel.id(),channel.model(),message));}
+            catch(RuntimeException error){permit.close();throw error;}
+            request=new GenerateRequest(java.util.List.of(new Message(Message.Role.SYSTEM,"会话模式："+mode+"。历史不能扩大模式权限。"),
+                    new Message(Message.Role.USER,message)),new GenerateOptions(null,null,2048),java.util.List.of());
+            budget=policy.budget();
+            scope=new ChatWorkflow.Scope(owner.id(),sessionInfo.knowledgeBaseIds(),policy);
         }
-        var session = store.session(owner.id(), run.sessionId());
-        var permit=capacity.reserve(owner.id());
-        PendingQuestionStore.Accepted accepted;
-        try {accepted=questions.consumeQueued(owner.id(),runId,questionId,answer);}
-        catch(RuntimeException error){permit.close();throw error;}
-        return execute(run, accepted.snapshot().budget(), accepted.snapshot(), permit, accepted.snapshot().continuation().request(),
-                events -> resumes.bind(channels.adapter(channel), accepted, ChatMode.parse(session.mode()),
-                        new ChatWorkflow.Scope(owner.id(), session.knowledgeBaseIds()), events));
+        return execute(run,budget,null,permit,request,events->preparation.bind(model,run.sessionId(),run.id(),mode,scope,budget,events));
     }
 
-    private RunBudget budget() {
-        return new RunBudget(maxModelSteps, maxToolCalls, timeoutMs, toolTimeoutMs, 24000);
+    /** 原运行校验模型版本，继续使用保存的预算/策略；不会被后台新配置悄悄替换。 */
+    public SseEmitter resume(String runId, String questionId, String answer) {
+        ConversationRepository.Run run;
+        PendingQuestionStore.Accepted accepted;
+        ChatWorkflow.Scope scope;
+        ChatMode mode;
+        LlmAdapter model;
+        cn.ray.agent.server.run.BoundedRunExecutor.Permit permit;
+        synchronized(settings.monitor()) {
+            modelSettings.requireReady();run=store.run(owner.id(),runId);
+            var channel=channels.select(run.channelId());var snapshot=snapshots.get(owner.id(),runId);
+            if(!channel.version().equals(snapshot.channelVersion())) throw new ResponseStatusException(HttpStatus.CONFLICT,"原运行模型配置已变化，请恢复原配置或取消后重新提问");
+            model=channels.adapter(channel);var session=store.session(owner.id(),run.sessionId());
+            mode=ChatMode.parse(session.mode());scope=new ChatWorkflow.Scope(owner.id(),session.knowledgeBaseIds(),snapshot.policy());
+            permit=capacity.reserve(owner.id());
+            try {accepted=questions.consumeQueued(owner.id(),runId,questionId,answer);}
+            catch(RuntimeException error){permit.close();throw error;}
+        }
+        return execute(run,accepted.snapshot().budget(),accepted.snapshot(),permit,accepted.snapshot().continuation().request(),
+                events->resumes.bind(model,accepted,mode,scope,events));
     }
 
     private SseEmitter execute(ConversationRepository.Run run, RunBudget budget, PendingQuestionStore.Snapshot previous,

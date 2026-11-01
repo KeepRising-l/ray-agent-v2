@@ -19,6 +19,7 @@ function start(port = 0) {
     const path = req.url; let body = ''; for await (const chunk of req) body += chunk
     const send = (value, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(value)) }
     if (path === '/api/model-channels') return send([{ id: 'local', model: 'fixture-chat' }])
+    if (path === '/api/auth/session') return send({ authenticated: true, username: 'fixture-owner', csrfToken: 'fixture-csrf', csrfHeader: 'X-CSRF-TOKEN' })
     if (path === '/api/knowledge-bases') return send(bases)
     if (path === '/api/sessions/status') return send([])
     if (path === '/api/tasks/capacity') return send({ runningLimit: 2, queueLimit: 8, running: 0, queued: 0, admitted: 0, rejected: 0 })

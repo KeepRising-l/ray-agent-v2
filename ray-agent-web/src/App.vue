@@ -3,6 +3,8 @@ import { nextTick, ref } from 'vue'
 import ChatWorkspace from './pages/ChatWorkspace.vue'
 import KnowledgeWorkspace from './pages/KnowledgeWorkspace.vue'
 import TaskPanel from './components/TaskPanel.vue'
+import AuthGate from './components/AuthGate.vue'
+import AdminLayout from './pages/admin/AdminLayout.vue'
 const view = ref('chat')
 const chat = ref(null)
 async function openSession(id) {
@@ -16,18 +18,21 @@ async function openChat() {
 }
 </script>
 <template>
-  <main>
+  <AuthGate v-slot="{ user, logout }"><main>
     <header class="app-header"><h1>RayAgent V2</h1>
       <nav aria-label="功能切换">
         <button :aria-current="view === 'chat' ? 'page' : undefined" @click="openChat">聊天</button>
         <button :aria-current="view === 'knowledge' ? 'page' : undefined" @click="view = 'knowledge'">知识库管理</button>
         <button :aria-current="view === 'tasks' ? 'page' : undefined" @click="view = 'tasks'">任务与运行</button>
+        <button :aria-current="view === 'admin' ? 'page' : undefined" @click="view = 'admin'">管理后台</button>
+        <button @click="logout">退出登录 · {{ user }}</button>
       </nav>
     </header>
     <KnowledgeWorkspace v-if="view === 'knowledge'" />
     <TaskPanel v-if="view === 'tasks'" @open-session="openSession" />
+    <AdminLayout v-if="view === 'admin'" @open-session="openSession" />
     <ChatWorkspace v-show="view === 'chat'" ref="chat" />
-  </main>
+  </main></AuthGate>
 </template>
 <style>
 :root { font-family: system-ui, 'Microsoft YaHei', sans-serif; color: #25292f; line-height: 1.65; background: #fff; }

@@ -25,6 +25,8 @@ public class ModelChannelService implements AutoCloseable {
     private final ModelRegistry registry;
     private final Map<String, ChannelView> channels = new LinkedHashMap<>();
     private final List<OpenAiCompatibleAdapter> ownedAdapters = new ArrayList<>();
+    private final Map<ChannelView,LlmAdapter> versions = new java.util.concurrent.ConcurrentHashMap<>();
+    private String defaultChannel = DEFAULT_CHANNEL;
 
     public ModelChannelService(ModelRegistry registry,
                                ObjectProvider<OpenAiCompatibleAdapter> defaultAdapter,
@@ -65,17 +67,17 @@ public class ModelChannelService implements AutoCloseable {
     }
 
     /** 可给前端展示的字段；不包含密钥或服务地址。 */
-    public List<ChannelView> list() {
-        return List.copyOf(channels.values());
+    public synchronized List<ChannelView> list() {
+        return channels.values().stream().sorted(java.util.Comparator.comparingInt(view->view.id().equals(defaultChannel)?0:1)).toList();
     }
 
     /** 未选择时使用默认渠道；不允许请求传入任意上游地址。 */
-    public ChannelView select(String requested) {
+    public synchronized ChannelView select(String requested) {
         if (channels.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "模型尚未配置");
         }
         String name = requested == null || requested.isBlank()
-                ? (channels.containsKey(DEFAULT_CHANNEL) ? DEFAULT_CHANNEL : channels.keySet().iterator().next())
+                ? (channels.containsKey(defaultChannel) ? defaultChannel : channels.keySet().iterator().next())
                 : requested;
         ChannelView channel = channels.get(name);
         if (channel == null) {
@@ -85,14 +87,35 @@ public class ModelChannelService implements AutoCloseable {
     }
 
     public LlmAdapter adapter(ChannelView channel) {
-        return registry.getRequired(channel.id());
+        var adapter = versions.get(channel);
+        return adapter == null ? registry.getRequired(channel.id()) : adapter;
     }
 
     @PreDestroy
     @Override
-    public void close() {
+    public synchronized void close() {
         ownedAdapters.forEach(OpenAiCompatibleAdapter::close);
     }
 
-    public record ChannelView(String id, String model) { }
+    /** 新运行取得不可变版本；旧adapter保留到进程关闭，配置热改不会关闭正在输出的连接。 */
+    public synchronized void install(List<RuntimeChannel> definitions,String selectedDefault) {
+        var next = new LinkedHashMap<String,ChannelView>();
+        for(var definition:definitions) {
+            if(!definition.enabled() || definition.key().isBlank()) continue;
+            var view=new ChannelView(definition.id(),definition.model(),definition.version());
+            if(!versions.containsKey(view)) {
+                var adapter=new OpenAiCompatibleAdapter(URI.create(definition.baseUrl()+"/chat/completions"),definition.key(),
+                        definition.model(),new RetryPolicy(2,Duration.ofMillis(200)));
+                ownedAdapters.add(adapter);versions.put(view,adapter);
+            }
+            next.put(view.id(),view);
+        }
+        channels.clear();channels.putAll(next);defaultChannel=selectedDefault;
+    }
+    public record RuntimeChannel(String id,String baseUrl,String model,String key,boolean enabled,String version) {
+        @Override public String toString(){return "RuntimeChannel["+id+", credentials redacted]";}
+    }
+    public record ChannelView(String id, String model,String version) {
+        public ChannelView(String id,String model){this(id,model,"bootstrap");}
+    }
 }

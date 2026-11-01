@@ -62,6 +62,7 @@ async function main() {
     await page.screenshot({ path: path.join(ROOT, 'logs/r09/desktop.png'), fullPage: true })
     await send('失败检查', '已输出的部分答案')
     await page.getByRole('alert').getByText('模型暂时不可用', { exact: true }).waitFor()
+    assert.ok(!(await page.locator('.chat-status').innerText()).includes('正在执行'))
     const beforeEdit = sent.length
     await page.getByRole('button', { name: '编辑后重新提问', exact: true }).click()
     assert.equal(sent.length, beforeEdit);assert.equal(await page.locator('#message').inputValue(), '失败检查')

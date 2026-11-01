@@ -1,17 +1,19 @@
 import { RequestError } from './http.js'
+import { csrfHeaders, authRejected } from './auth.js'
 
 /** 发送一条消息，逐段读取后端的 text、done、error 事件。 */
 export async function streamChat(message, signal, onText, channelId, options = {}) {
   const resume = options.resume
   const response = await fetch(resume ? `/api/runs/${encodeURIComponent(resume.runId)}/answers` : '/api/chat/stream', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    headers: { ...csrfHeaders('POST'), 'Content-Type': 'application/json', Accept: 'text/event-stream' },
     body: JSON.stringify(resume ? { questionId: resume.questionId, answer: resume.answer }
       : { message, channelId, sessionId: options.sessionId, clientRequestId: options.clientRequestId }),
     signal,
   })
 
   if (!response.ok) {
+    await authRejected(response.status)
     const payload = await response.json().catch(() => ({}))
     if (response.status === 429) throw new RequestError('运行容量已满，请等待或取消现有运行后重试。', 429)
     const hint = response.status === 409 ? '当前会话已有运行或请求重复，请查看运行记录。' : `请求失败（HTTP ${response.status}）。`

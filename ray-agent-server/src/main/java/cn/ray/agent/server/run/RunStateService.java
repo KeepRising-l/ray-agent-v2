@@ -16,10 +16,12 @@ public class RunStateService implements ApplicationRunner {
     private final DataSource source;
     private final cn.ray.agent.server.task.InterruptedRunRecovery recovery;
     private Connection lease;
+    private final cn.ray.agent.server.admin.AdminSettingsStore settings;
 
-    public RunStateService(DataSource source,cn.ray.agent.server.task.InterruptedRunRecovery recovery) {
+    public RunStateService(DataSource source,cn.ray.agent.server.task.InterruptedRunRecovery recovery,cn.ray.agent.server.admin.AdminSettingsStore settings) {
         this.source = source;
         this.recovery=recovery;
+        this.settings=settings;
     }
 
     @Override
@@ -33,6 +35,7 @@ public class RunStateService implements ApplicationRunner {
             }
         }
         recovery.recover();
+        settings.jdbc().update("UPDATE ra_admin_audit SET status='INTERRUPTED',code='PROCESS_RESTART',ended_at=? WHERE status='REQUESTED'",System.currentTimeMillis());
     }
 
     @PreDestroy
