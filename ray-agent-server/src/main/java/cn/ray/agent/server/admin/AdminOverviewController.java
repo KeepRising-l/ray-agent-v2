@@ -2,7 +2,7 @@ package cn.ray.agent.server.admin;
 
 import cn.ray.agent.server.task.TaskQueryService;
 import cn.ray.agent.server.conversation.SessionQueryService;
-import cn.ray.agent.server.run.BoundedRunExecutor;
+import cn.ray.agent.server.run.admission.BoundedRunExecutor;
 import org.springframework.web.bind.annotation.*;
 import java.util.*;
 

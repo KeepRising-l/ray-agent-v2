@@ -1,7 +1,7 @@
 package cn.ray.agent.server.task;
 
 import cn.ray.agent.server.conversation.*;
-import cn.ray.agent.server.run.BoundedRunExecutor;
+import cn.ray.agent.server.run.admission.BoundedRunExecutor;
 import org.springframework.web.bind.annotation.*;
 import java.util.*;
 

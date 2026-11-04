@@ -4,15 +4,15 @@ import cn.ray.agent.runtime.agent.AgentEventSink;
 import cn.ray.agent.runtime.agent.ReactLoopAgent;
 import cn.ray.agent.runtime.agent.RunBudget;
 import cn.ray.agent.runtime.agent.UserQuestionRequired;
-import cn.ray.agent.server.run.PendingQuestionStore;
-import cn.ray.agent.server.run.RunResumeService;
+import cn.ray.agent.server.run.question.PendingQuestionStore;
+import cn.ray.agent.server.run.question.RunResumeService;
 import cn.ray.agent.server.rag.answer.GroundedAnswerService;
 import cn.ray.agent.server.rag.answer.RagStreamEventMapper;
 import cn.ray.agent.runtime.model.*;
 import cn.ray.agent.server.conversation.ConversationRepository;
 import cn.ray.agent.server.conversation.LocalOwner;
 import cn.ray.agent.server.model.ModelChannelService;
-import cn.ray.agent.server.run.RunDispatcher;
+import cn.ray.agent.server.run.dispatch.RunDispatcher;
 import cn.ray.agent.server.admin.*;
 import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Value;
@@ -34,8 +34,8 @@ public class ChatApplicationService {
     private final ConversationRepository store;
     private final LocalOwner owner;
     private final RunDispatcher dispatcher;
-    private final cn.ray.agent.server.run.BoundedRunExecutor capacity;
-    private final cn.ray.agent.server.run.RequestIdempotencyService idempotency;
+    private final cn.ray.agent.server.run.admission.BoundedRunExecutor capacity;
+    private final cn.ray.agent.server.run.admission.RequestIdempotencyService idempotency;
     private final long queueTimeoutMs;
     private final cn.ray.agent.server.conversation.SessionRegistry registry;
     private final ContextPreparationService preparation;
@@ -56,7 +56,7 @@ public class ChatApplicationService {
 
     public ChatApplicationService(ModelChannelService channels, ConversationRepository store,
                                   LocalOwner owner, RunDispatcher dispatcher, ContextPreparationService preparation,
-                                  cn.ray.agent.server.run.BoundedRunExecutor capacity, cn.ray.agent.server.run.RequestIdempotencyService idempotency,
+                                  cn.ray.agent.server.run.admission.BoundedRunExecutor capacity, cn.ray.agent.server.run.admission.RequestIdempotencyService idempotency,
                                   cn.ray.agent.server.conversation.SessionRegistry registry,
                                   @Value("${ray.run.queue-timeout-ms:30000}") long queueTimeoutMs,
                                   PendingQuestionStore questions, RunResumeService resumes,
@@ -90,7 +90,7 @@ public class ChatApplicationService {
         ChatMode mode;
         ChatWorkflow.Scope scope;
         LlmAdapter model;
-        cn.ray.agent.server.run.BoundedRunExecutor.Permit permit;
+        cn.ray.agent.server.run.admission.BoundedRunExecutor.Permit permit;
         synchronized(settings.monitor()) {
             modelSettings.requireReady();
             var channel=channels.select(channelId);
@@ -121,7 +121,7 @@ public class ChatApplicationService {
         ChatWorkflow.Scope scope;
         ChatMode mode;
         LlmAdapter model;
-        cn.ray.agent.server.run.BoundedRunExecutor.Permit permit;
+        cn.ray.agent.server.run.admission.BoundedRunExecutor.Permit permit;
         synchronized(settings.monitor()) {
             modelSettings.requireReady();run=store.run(owner.id(),runId);
             var channel=channels.select(run.channelId());var snapshot=snapshots.get(owner.id(),runId);
@@ -138,7 +138,7 @@ public class ChatApplicationService {
     }
 
     private SseEmitter execute(ConversationRepository.Run run, RunBudget budget, PendingQuestionStore.Snapshot previous,
-                               cn.ray.agent.server.run.BoundedRunExecutor.Permit permit, GenerateRequest request, java.util.function.Function<ChatWorkflow.Events,LlmAdapter> factory) {
+                               cn.ray.agent.server.run.admission.BoundedRunExecutor.Permit permit, GenerateRequest request, java.util.function.Function<ChatWorkflow.Events,LlmAdapter> factory) {
         long remaining = budget.timeoutMs() - (previous == null ? 0 : previous.activeMs());
         SseEmitter emitter = new SseEmitter(Math.max(1, remaining) + queueTimeoutMs + 5000);
         ChatRun execution = new ChatRun(run.id(), emitter, budget, previous,permit);
@@ -197,7 +197,7 @@ public class ChatApplicationService {
         private final PendingQuestionStore.Snapshot previous;
         private long startedAt;
         private final cn.ray.agent.server.conversation.SessionRegistry.Entry registration;
-        private final cn.ray.agent.server.run.BoundedRunExecutor.Permit permit;
+        private final cn.ray.agent.server.run.admission.BoundedRunExecutor.Permit permit;
         private int modelCalls;
         private int estimatedInput;
         private Integer periodInput = 0;
@@ -205,7 +205,7 @@ public class ChatApplicationService {
         private ScheduledFuture<?> deadline;
         private ScheduledFuture<?> heartbeat;
 
-        private ChatRun(String id, SseEmitter emitter, RunBudget budget, PendingQuestionStore.Snapshot previous,cn.ray.agent.server.run.BoundedRunExecutor.Permit permit) {
+        private ChatRun(String id, SseEmitter emitter, RunBudget budget, PendingQuestionStore.Snapshot previous,cn.ray.agent.server.run.admission.BoundedRunExecutor.Permit permit) {
             this.id = id;
             this.emitter = emitter;
             this.budget = budget;

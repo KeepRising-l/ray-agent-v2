@@ -134,7 +134,7 @@ public class DocumentRepository {
             Version version = rows.get(0);
             stage(version.id(), "UPLOADED", "PARSING");
             jdbc.update("UPDATE ra_document_version SET target_profile=COALESCE(target_profile,?) WHERE id=?",targetProfile,version.id());
-            cn.ray.agent.server.task.TaskCheckpointStore.begin(jdbc,version.id());
+            cn.ray.agent.server.rag.ingest.TaskCheckpointStore.begin(jdbc,version.id());
             version=jdbc.queryForObject("SELECT * FROM ra_document_version WHERE id=?",versionMapper,version.id());
             var owner = jdbc.queryForMap("SELECT owner_id,kb_id,name FROM ra_document WHERE id=?", version.documentId());
             String key = jdbc.queryForObject("SELECT storage_key FROM ra_document_version WHERE id=?", String.class, version.id());
@@ -146,7 +146,7 @@ public class DocumentRepository {
         if (jdbc.update("UPDATE ra_document_version SET status=? WHERE id=? AND status=?", next, id, expected) != 1) {
             throw new java.util.concurrent.CancellationException("document state changed");
         }
-        cn.ray.agent.server.task.TaskCheckpointStore.stage(jdbc,id,next);
+        cn.ray.agent.server.rag.ingest.TaskCheckpointStore.stage(jdbc,id,next);
     }
 
     public void saveChunks(Work work, List<DocumentChunk> result) {
@@ -168,7 +168,7 @@ public class DocumentRepository {
             vectors.write(profile, result, embeddings);
             jdbc.update("UPDATE ra_document_version SET embedding_profile=?,ended_at=?,failure_stage=NULL,error_message=NULL WHERE id=?", profile.id(), System.currentTimeMillis(), work.version().id());
             jdbc.update("UPDATE ra_document SET active_version_id=? WHERE id=?", work.version().id(), work.version().documentId());
-            cn.ray.agent.server.task.TaskCheckpointStore.end(jdbc,work.version().id(),"PUBLISHED","SUCCEEDED",null,false);
+            cn.ray.agent.server.rag.ingest.TaskCheckpointStore.end(jdbc,work.version().id(),"PUBLISHED","SUCCEEDED",null,false);
         });
     }
 
@@ -180,7 +180,7 @@ public class DocumentRepository {
         tx.executeWithoutResult(status -> {
             int changed=jdbc.update("UPDATE ra_document_version SET status=?,failure_stage=?,error_message=?,ended_at=? WHERE id=? AND status IN ('PARSING','CHUNKING','EMBEDDING')",
                     interrupted?"INTERRUPTED":"FAILED",stage,message,System.currentTimeMillis(),id);
-            if(changed>0) {cn.ray.agent.server.task.TaskCheckpointStore.end(jdbc,id,stage,interrupted?"INTERRUPTED":"FAILED",code,retryable);}
+            if(changed>0) {cn.ray.agent.server.rag.ingest.TaskCheckpointStore.end(jdbc,id,stage,interrupted?"INTERRUPTED":"FAILED",code,retryable);}
         });
     }
 

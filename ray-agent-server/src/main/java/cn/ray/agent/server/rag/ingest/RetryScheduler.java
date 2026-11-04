@@ -1,4 +1,4 @@
-package cn.ray.agent.server.task;
+package cn.ray.agent.server.rag.ingest;
 
 import cn.ray.agent.server.knowledge.DocumentRepository;
 import org.springframework.beans.factory.annotation.Value;

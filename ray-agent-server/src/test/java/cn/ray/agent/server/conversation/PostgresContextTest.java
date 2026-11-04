@@ -3,7 +3,7 @@ package cn.ray.agent.server.conversation;
 import cn.ray.agent.runtime.agent.*;
 import cn.ray.agent.runtime.context.*;
 import cn.ray.agent.runtime.model.*;
-import cn.ray.agent.server.run.PendingQuestionStore;
+import cn.ray.agent.server.run.question.PendingQuestionStore;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.core.io.ClassPathResource;

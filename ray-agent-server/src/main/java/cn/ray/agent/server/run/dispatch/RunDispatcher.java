@@ -1,4 +1,6 @@
-package cn.ray.agent.server.run;
+package cn.ray.agent.server.run.dispatch;
+
+import cn.ray.agent.server.run.admission.BoundedRunExecutor;
 
 import cn.ray.agent.runtime.model.GenerateRequest;
 import cn.ray.agent.runtime.model.LlmAdapter;

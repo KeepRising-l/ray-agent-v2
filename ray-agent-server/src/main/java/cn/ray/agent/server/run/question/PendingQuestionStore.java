@@ -1,4 +1,4 @@
-package cn.ray.agent.server.run;
+package cn.ray.agent.server.run.question;
 
 import cn.ray.agent.runtime.agent.*;
 import cn.ray.agent.runtime.model.TokenUsage;
@@ -82,7 +82,7 @@ public class PendingQuestionStore {
             catch (java.io.IOException e) { throw new IllegalStateException("invalid stored checkpoint", e); }
             jdbc.update("UPDATE ra_user_question SET status='ANSWERED',answer=?,answered_at=? WHERE id=?", answer.strip(), System.currentTimeMillis(), questionId);
             jdbc.update("UPDATE ra_run SET status=? WHERE id=?", queued?"QUEUED":"RUNNING",run);
-            if(queued) {cn.ray.agent.server.task.TaskStateRepository.enqueue(jdbc,owner,run,"RESUME");}
+            if(queued) {cn.ray.agent.server.run.dispatch.TaskStateRepository.enqueue(jdbc,owner,run,"RESUME");}
             store.appendEvent(owner, run, "USER_ANSWERED", json(Map.of("questionId", questionId)));
             return new Accepted(snapshot, answer.strip());
         });

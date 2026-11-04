@@ -1,4 +1,4 @@
-package cn.ray.agent.server.run;
+package cn.ray.agent.server.run.admission;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.http.HttpStatus;

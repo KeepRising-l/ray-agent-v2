@@ -1,6 +1,6 @@
-package cn.ray.agent.server.run;
+package cn.ray.agent.server.run.admission;
 
-import cn.ray.agent.server.task.RunQueue;
+import cn.ray.agent.server.run.dispatch.RunQueue;
 import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;

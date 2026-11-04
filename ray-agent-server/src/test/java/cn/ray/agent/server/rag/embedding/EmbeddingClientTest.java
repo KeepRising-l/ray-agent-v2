@@ -75,7 +75,7 @@ class EmbeddingClientTest {
             try (var client = new OpenAiEmbeddingClient(profile(server.getAddress().getPort()), "test", Duration.ofSeconds(2))) {
                 var failure = assertThrows(EmbeddingClient.Failure.class, () -> client.embed(List.of("test")));
                 assertEquals("INVALID_RESPONSE", failure.code());
-                assertFalse(cn.ray.agent.server.task.TaskCheckpointStore.transientEmbedding(failure.code()));
+                assertFalse(cn.ray.agent.server.rag.ingest.TaskCheckpointStore.transientEmbedding(failure.code()));
             } finally {
                 server.stop(0);
             }

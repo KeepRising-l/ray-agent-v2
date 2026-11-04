@@ -1,4 +1,4 @@
-package cn.ray.agent.server.task;
+package cn.ray.agent.server.rag.ingest;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 

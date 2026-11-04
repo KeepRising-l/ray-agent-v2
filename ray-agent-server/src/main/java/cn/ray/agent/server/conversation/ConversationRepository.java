@@ -88,8 +88,8 @@ public class ConversationRepository {
 
     private Run begin(String owner,String sessionId,String requestId,String channel,String model,String input,String initialState) {
         return transactions.execute(status -> {
-            new cn.ray.agent.server.run.SessionWriteLease().acquire(jdbc,owner,sessionId);
-            new cn.ray.agent.server.run.RequestIdempotencyService(jdbc,this).assertNew(owner,sessionId,requestId,input,channel);
+            new cn.ray.agent.server.run.admission.SessionWriteLease().acquire(jdbc,owner,sessionId);
+            new cn.ray.agent.server.run.admission.RequestIdempotencyService(jdbc,this).assertNew(owner,sessionId,requestId,input,channel);
             if (!jdbc.queryForList("SELECT id FROM ra_run WHERE session_id=? AND status IN ('CREATED','QUEUED','RUNNING','WAITING_USER')", sessionId).isEmpty()) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "当前会话已有运行，请先等待或取消");
             }
@@ -98,7 +98,7 @@ public class ConversationRepository {
             jdbc.update("INSERT INTO ra_run(id,session_id,owner_id,client_request_id,channel_id,configured_model,status,created_at) VALUES (?,?,?,?,?,?,?,?)", id, sessionId, owner, requestId, channel, model, initialState, now);
             jdbc.update("INSERT INTO ra_message VALUES (?,?,?,'USER',?,TRUE,?)", UUID.randomUUID().toString(), sessionId, id, input, now);
             if(initialState.equals("QUEUED")) {
-                cn.ray.agent.server.task.TaskStateRepository.enqueue(jdbc,owner,id,"NEW");
+                cn.ray.agent.server.run.dispatch.TaskStateRepository.enqueue(jdbc,owner,id,"NEW");
             }
             event(id, initialState.equals("QUEUED") ? "QUEUED" : "STARTED", "channel=" + channel);
             return run(owner, id);

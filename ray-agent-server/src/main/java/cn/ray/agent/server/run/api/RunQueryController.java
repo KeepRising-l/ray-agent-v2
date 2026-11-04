@@ -1,4 +1,4 @@
-package cn.ray.agent.server.run;
+package cn.ray.agent.server.run.api;
 
 import cn.ray.agent.server.chat.ChatApplicationService;
 import cn.ray.agent.server.conversation.ConversationRepository;

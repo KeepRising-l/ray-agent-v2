@@ -21,7 +21,7 @@ public class DocumentIngestionService {
     private final ParserSelector parsers;
     private final EmbeddingClient embedding;
     private final DocumentDeleteService deletion;
-    private cn.ray.agent.server.task.RetryScheduler retries;
+    private cn.ray.agent.server.rag.ingest.RetryScheduler retries;
     private cn.ray.agent.server.admin.AdminSettingsStore settings;
     private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor(task -> {
         Thread thread = new Thread(task, "document-ingestion");
@@ -45,7 +45,7 @@ public class DocumentIngestionService {
 
     @org.springframework.beans.factory.annotation.Autowired
     public DocumentIngestionService(DocumentRepository store,DocumentFileStore files,ParserSelector parsers,
-            EmbeddingClient embedding,DocumentDeleteService deletion,cn.ray.agent.server.task.RetryScheduler retries,
+            EmbeddingClient embedding,DocumentDeleteService deletion,cn.ray.agent.server.rag.ingest.RetryScheduler retries,
             cn.ray.agent.server.admin.AdminSettingsStore settings) {
         this(store,files,parsers,embedding,deletion);
         this.retries=retries;
@@ -106,7 +106,7 @@ public class DocumentIngestionService {
         } catch (DocumentParser.Failure e) {
             store.fail(id, stage, e.getMessage(), false,"PARSER_OR_POLICY",false);
         } catch (EmbeddingClient.Failure e) {
-            store.fail(id, stage, e.getMessage(), false,e.code(),cn.ray.agent.server.task.TaskCheckpointStore.transientEmbedding(e.code()));
+            store.fail(id, stage, e.getMessage(), false,e.code(),cn.ray.agent.server.rag.ingest.TaskCheckpointStore.transientEmbedding(e.code()));
         } catch (java.io.IOException e) {
             store.fail(id, stage, "原文件读取失败，或文件摘要与上传记录不一致", false);
         } catch (Exception e) {

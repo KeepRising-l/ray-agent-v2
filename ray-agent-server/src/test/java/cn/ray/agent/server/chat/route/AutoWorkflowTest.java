@@ -321,9 +321,9 @@ class AutoWorkflowTest {
         });
         var original=input("那个方案如何，请先问清需求");
         var continuation=new UserQuestionRequired.Continuation("AUTO_ROUTE","你希望做什么？",original,null);
-        var snapshot=new cn.ray.agent.server.run.PendingQuestionStore.Snapshot(1,continuation,budget,1,10,100,new TokenUsage(3,2),"");
-        var accepted=new cn.ray.agent.server.run.PendingQuestionStore.Accepted(snapshot,"直接解释Java接口，只用常识。");
-        var resume=new cn.ray.agent.server.run.RunResumeService(runner,agent,dispatcher);
+        var snapshot=new cn.ray.agent.server.run.question.PendingQuestionStore.Snapshot(1,continuation,budget,1,10,100,new TokenUsage(3,2),"");
+        var accepted=new cn.ray.agent.server.run.question.PendingQuestionStore.Accepted(snapshot,"直接解释Java接口，只用常识。");
+        var resume=new cn.ray.agent.server.run.question.RunResumeService(runner,agent,dispatcher);
         var probe=new Probe();resume.bind(model(),accepted,ChatMode.AUTO,scope,sinks).generate(original).subscribe(probe);
         probe.done.get(3,TimeUnit.SECONDS);assertNull(probe.error);assertTrue(probe.text.toString().contains("接口"));
     }
