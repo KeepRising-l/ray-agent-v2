@@ -76,7 +76,7 @@ async function showSource(runId, id) {
   sourceArea.value?.scrollIntoView({ block: 'start', behavior: 'instant' })
 }
 watch(() => s.sessionId, () => { follow.value = true; bottom(true) })
-watch([() => s.messages.length, () => chat.liveAnswer.value, () => s.question], () => bottom())
+watch([() => s.messages.length, () => chat.liveAnswer.value, () => chat.thinking.value, () => s.question], () => bottom())
 watch(() => s.draft, grow, { immediate: true })
 </script>
 
@@ -108,6 +108,7 @@ watch(() => s.draft, grow, { immediate: true })
             <div class="message-body"><MessageContent :content="item.content" :plain="item.role === 'USER'" :sources="item.role === 'ASSISTANT' && !!item.runId" :disabled="chat.busy.value" @source="id => showSource(item.runId, id)"/></div>
           </article>
           <article v-if="chat.liveAnswer.value" class="message message-assistant live-answer"><div class="message-label"><BrandMark/><span>RayAgent</span><span class="stream-dot" aria-label="正在输出"/></div><MessageContent :content="chat.liveAnswer.value"/></article>
+          <article v-if="chat.thinking.value" class="message message-assistant thinking-message" role="status" aria-label="RayAgent 正在思考"><div class="message-label"><BrandMark/><span>RayAgent</span></div><div class="thinking-bubble"><span class="thinking-dots"><span/><span/><span/></span></div></article>
         </section>
         <button v-if="chat.active.value && chat.active.value.id !== s.currentRun?.id" @click="chat.viewRun(chat.active.value.id)">查看活动运行</button>
         <PendingQuestionPanel :question="s.question" :disabled="chat.busy.value" @answer="chat.answer"/>

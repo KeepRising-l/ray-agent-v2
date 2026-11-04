@@ -48,6 +48,19 @@ test('发送后立即清空输入框并显示用户消息，流未结束也不�
   assert.equal(chat.state.draft, '')
 })
 
+test('运行中尚未输出时显示思考气泡，开始吐字后消失', async () => {
+  const hold = deferred(); let write
+  const { chat } = harness({}, async (_m, _s, text, _c, options) => {
+    options.onMeta({ runId: 'r1', status: 'RUNNING' }); write = text
+    await hold.promise; return 'STOP'
+  })
+  await chat.init(); chat.state.draft = '问题'; const running = chat.submit()
+  assert.equal(chat.thinking.value, true)
+  write('第一段')
+  assert.equal(chat.thinking.value, false)
+  hold.resolve(); await running
+})
+
 test('回答期间可继续发送，排队消息不覆盖当前回答，轮到时接管视图', async () => {
   const first = deferred(); const second = deferred(); const started = []; const opts = []
   const { chat } = harness({}, async (message, _s, text, _c, options) => {

@@ -36,6 +36,11 @@ export function createChatSession({ api = requestJson, stream = streamChat, answ
     return state.partial && !state.messages.some(m => m.role === 'ASSISTANT' && m.runId === state.partial.runId) ? state.partial.text : ''
   })
   const busy = computed(() => opsOf(state.sessionId).length > 0)
+  // 运行中但还没有任何文字时显示思考泡泡；模型开始输出后由 liveAnswer 接管。
+  const thinking = computed(() => {
+    const op = runningOp.value
+    return !!op && !op.view.text && !state.question
+  })
   // 排队消息优先取本页仍在读取的流；刷新或从其他标签页进入时回退到服务端 runs。
   const queued = computed(() => {
     const items = opsOf(state.sessionId).filter(op => op.view.phase === 'QUEUED')
@@ -339,6 +344,6 @@ export function createChatSession({ api = requestJson, stream = streamChat, answ
     for (const op of operations.values()) op.controller.abort()
     operations.clear()
   }
-  return { state, selected, active, busy, queued, liveAnswer, canSend, init, select, create, refresh, submit, answer, cancel, cancelQueued, probe, editLast, poll, dispose,
+  return { state, selected, active, busy, queued, thinking, liveAnswer, canSend, init, select, create, refresh, submit, answer, cancel, cancelQueued, probe, editLast, poll, dispose,
     viewRun: async id => { const token = selection; try { await loadRun(state.runs.find(run => run.id === id) || null) } catch (error) { if (token === selection) state.error = errorNotice(error) } } }
 }
