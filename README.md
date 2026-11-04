@@ -130,7 +130,7 @@ ray.embedding.api-key=填写你自己的密钥
 
 ## 并发、任务队列与恢复（R08）
 
-不同会话默认最多2个run执行、8个等待；同会话有活动run时新问题409，重复clientRequestId可查询原run，容量满429且不创建run。SSE与运行记录区分QUEUED/RUNNING/终态，排队可取消和超时；异步流结束或等待用户时才释放执行槽。配置为`ray.run.max-concurrent`、`ray.run.queue-capacity`、`ray.run.max-per-owner`、`ray.run.queue-timeout-ms`。
+不同会话默认最多2个run执行、8个等待；同一会话按消息顺序串行执行，活动run（含RUNNING/QUEUED/WAITING_USER）默认最多2条，超出返回429；重复clientRequestId可查询原run，全局容量满429且不创建run。SSE与运行记录区分QUEUED/RUNNING/终态，排队可取消和超时；异步流结束或等待用户时才释放执行槽。配置为`ray.run.max-concurrent`、`ray.run.queue-capacity`、`ray.run.max-per-owner`、`ray.run.max-queued-per-session`、`ray.run.session-queue-timeout-ms`。
 
 顶部“任务与运行”查询当前owner的聊天与文档任务，可取消活动run、查看原会话、查询文档尝试记录，并重试最新失败/中断文档。文档临时Embedding失败默认最多自动重试2次，认证/格式/策略错误不自动重试。重启将遗留QUEUED/RUNNING聊天及处理中入库标记中断，不自动重放聊天；有效WAITING_USER仍可按原检查点回答。
 

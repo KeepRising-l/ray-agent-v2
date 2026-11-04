@@ -48,6 +48,44 @@ test('发送后立即清空输入框并显示用户消息，流未结束也不�
   assert.equal(chat.state.draft, '')
 })
 
+test('回答期间可继续发送，排队消息不覆盖当前回答，轮到时接管视图', async () => {
+  const first = deferred(); const second = deferred(); const started = []; const opts = []
+  const { chat } = harness({}, async (message, _s, text, _c, options) => {
+    started.push(message); opts.push(options)
+    if (message === '第一条') {
+      options.onMeta({ runId: 'r1', status: 'RUNNING' }); text('第一段')
+      await first.promise; text('完成'); return 'STOP'
+    }
+    options.onMeta({ runId: 'r2', status: 'QUEUED' }); options.onQueue({ runId: 'r2', status: 'QUEUED' })
+    await second.promise; return 'STOP'
+  })
+  await chat.init(); chat.state.draft = '第一条'; const a = chat.submit()
+  chat.state.draft = '第二条'; const b = chat.submit()
+  // 两条请求各自订阅；第二条已提交但仍在排队。
+  assert.deepEqual(started, ['第一条', '第二条'])
+  assert.deepEqual(chat.state.messages.slice(-2).map(m => m.content), ['第一条', '第二条'])
+  assert.equal(chat.liveAnswer.value, '第一段')
+  assert.equal(chat.state.currentRun.id, 'r1')
+  assert.deepEqual(chat.queued.value.map(item => item.text), ['第二条'])
+  first.resolve(); await a
+  // 第一条结束后，排队消息取得执行槽并接管轨迹视图。
+  opts[1].onQueue({ runId: 'r2', status: 'RUNNING' })
+  assert.equal(chat.state.currentRun.id, 'r2')
+  second.resolve(); await b
+})
+
+test('取消排队消息调用对应run，不依赖当前选中运行', async () => {
+  const hold = deferred()
+  const { chat, calls } = harness({ '/api/runs/r1/cancel': { id: 'r1', status: 'CANCELLED' } }, async (_m, _s, _t, _c, options) => {
+    options.onMeta({ runId: 'r1', status: 'QUEUED' }); await hold.promise; return 'CANCELLED'
+  })
+  await chat.init(); chat.state.draft = '排队'; const running = chat.submit()
+  await chat.cancelQueued('r1')
+  assert.ok(calls.some(([path, options]) => path === '/api/runs/r1/cancel' && options?.method === 'POST'))
+  assert.equal(chat.state.status, '已取消排队消息')
+  hold.resolve(); await running
+})
+
 test('切换时流仍属原会话，不把文本或事件灌入其他会话，草稿分别保留', async () => {
   const finish = deferred(); let handlers; let write
   const { chat } = harness({}, async (_m, _s, text, _c, options) => { handlers = options; write = text; await finish.promise; return 'STOP' })

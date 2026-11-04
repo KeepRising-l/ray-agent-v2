@@ -858,6 +858,41 @@ kbd {
   font-size: 14px;
   padding: 12px 0
 }
+/* 同会话连续发送时，在输入框上方列出尚未执行的排队消息。 */
+.queue-panel {
+  margin-bottom: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface)
+}
+.queue-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 0;
+  padding: 5px 0;
+  font-size: 13px;
+  color: var(--muted)
+}
+.queue-position { flex-shrink: 0 }
+.queue-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text)
+}
+.queue-item button {
+  flex-shrink: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer
+}
+.queue-item button:hover { color: var(--accent) }
 .composer-dock {
   flex-shrink: 0;
   padding: 12px 32px 8px;

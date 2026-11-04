@@ -66,7 +66,7 @@ public class PendingQuestionStore {
     }
 
     private Accepted consume(String owner,String run,String questionId,String answer,boolean queued) {
-        expire();
+        // 到期扫描由后台调度完成；这里只拒绝已过有效期的回答，避免把已过期检查点重新执行。
         if (answer == null || answer.isBlank() || answer.length() > 2000) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "补充回答需要1到2000字符");
         }
@@ -75,7 +75,10 @@ public class PendingQuestionStore {
             var rows = jdbc.queryForList("SELECT * FROM ra_user_question WHERE id=? AND run_id=? AND owner_id=? FOR UPDATE", questionId, run, owner);
             if (rows.isEmpty()) { throw new ResponseStatusException(HttpStatus.NOT_FOUND, "提问不存在"); }
             var row = rows.get(0);
-            if (row.get("status").equals("EXPIRED")) { throw new ResponseStatusException(HttpStatus.GONE, "提问已过期"); }
+            if (row.get("status").equals("EXPIRED")
+                    || ((Number) row.get("expires_at")).longValue() <= System.currentTimeMillis()) {
+                throw new ResponseStatusException(HttpStatus.GONE, "提问已过期");
+            }
             if (!state.status().equals("WAITING_USER") || !row.get("status").equals("WAITING_USER")) { throw conflict(); }
             Snapshot snapshot;
             try { snapshot = mapper.readValue(row.get("checkpoint").toString(), Snapshot.class); }
@@ -98,20 +101,27 @@ public class PendingQuestionStore {
         });
     }
 
-    /** 到期只结束等待，不自动重新执行。重启保留未到期WAITING_USER检查点。 */
-    public void expire() {
-        var expired = jdbc.queryForList("SELECT run_id,owner_id FROM ra_user_question WHERE status='WAITING_USER' AND expires_at<=?", System.currentTimeMillis());
+    /** 到期只结束等待，不自动重新执行；返回实际结束的运行，由上层释放会话闸门。 */
+    public List<Expired> expire() {
+        var expired = jdbc.queryForList("SELECT q.run_id,q.owner_id,r.session_id FROM ra_user_question q JOIN ra_run r ON r.id=q.run_id WHERE q.status='WAITING_USER' AND q.expires_at<=?", System.currentTimeMillis());
+        var result = new ArrayList<Expired>();
         for (var row : expired) {
             transactions.executeWithoutResult(tx -> {
                 String run = row.get("run_id").toString(), owner = row.get("owner_id").toString();
+                String session = row.get("session_id").toString();
                 var state = lock(owner, run);
                 int changed = jdbc.update("UPDATE ra_user_question SET status='EXPIRED' WHERE run_id=? AND status='WAITING_USER' AND expires_at<=?", run, System.currentTimeMillis());
+                // 只有确实把仍处于等待的 run 结束掉，才允许上层释放闸门；已回答并续跑的 run 不能提前放行。
                 if (changed > 0 && state.status().equals("WAITING_USER")) {
                     store.finish(owner, run, "TIMED_OUT", null, new TokenUsage(state.inputTokens(), state.outputTokens()), "等待用户回答已过期");
+                    result.add(new Expired(owner, session, run));
                 }
             });
         }
+        return result;
     }
+
+    public record Expired(String ownerId, String sessionId, String runId) { }
 
     private ConversationRepository.Run lock(String owner, String run) {
         store.run(owner, run);

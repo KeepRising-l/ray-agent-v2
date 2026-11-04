@@ -36,7 +36,7 @@ public class ChatApplicationService {
     private final RunDispatcher dispatcher;
     private final cn.ray.agent.server.run.admission.BoundedRunExecutor capacity;
     private final cn.ray.agent.server.run.admission.RequestIdempotencyService idempotency;
-    private final long queueTimeoutMs;
+    private final long sessionQueueTimeoutMs;
     private final cn.ray.agent.server.conversation.SessionRegistry registry;
     private final ContextPreparationService preparation;
     private final PendingQuestionStore questions;
@@ -58,7 +58,7 @@ public class ChatApplicationService {
                                   LocalOwner owner, RunDispatcher dispatcher, ContextPreparationService preparation,
                                   cn.ray.agent.server.run.admission.BoundedRunExecutor capacity, cn.ray.agent.server.run.admission.RequestIdempotencyService idempotency,
                                   cn.ray.agent.server.conversation.SessionRegistry registry,
-                                  @Value("${ray.run.queue-timeout-ms:30000}") long queueTimeoutMs,
+                                  @Value("${ray.run.session-queue-timeout-ms:120000}") long sessionQueueTimeoutMs,
                                   PendingQuestionStore questions, RunResumeService resumes,
                                   RagStreamEventMapper ragEvents, AdminSettingsStore settings, ModelSettingsService modelSettings,
                                   RuntimePolicyService policies, RunSnapshotService snapshots) {
@@ -69,8 +69,8 @@ public class ChatApplicationService {
         this.capacity = capacity;
         this.registry=registry;
         this.idempotency = idempotency;
-        if(queueTimeoutMs<100 || queueTimeoutMs>600000){throw new IllegalArgumentException("invalid queue timeout");}
-        this.queueTimeoutMs=queueTimeoutMs;
+        if(sessionQueueTimeoutMs<100 || sessionQueueTimeoutMs>600000){throw new IllegalArgumentException("invalid session queue timeout");}
+        this.sessionQueueTimeoutMs=sessionQueueTimeoutMs;
         this.preparation = preparation;
         this.questions = questions;
         this.resumes = resumes;
@@ -78,7 +78,12 @@ public class ChatApplicationService {
         this.settings=settings; this.modelSettings=modelSettings; this.policies=policies; this.snapshots=snapshots;
         timers.setRemoveOnCancelPolicy(true);
         timers.scheduleAtFixedRate(() -> {
-            try { questions.expire(); } catch (RuntimeException ignored) { /* 数据库暂不可用时下轮再查，不终止清理调度。 */ }
+            try {
+                // 过期等待必须先落终态，再释放会话闸门，避免后续消息读到不完整上下文。
+                for (var expired : questions.expire()) {
+                    capacity.release(expired.sessionId(), expired.runId());
+                }
+            } catch (RuntimeException ignored) { /* 数据库暂不可用时下轮再查，不终止清理调度。 */ }
         }, 30, 30, TimeUnit.SECONDS);
     }
 
@@ -106,12 +111,20 @@ public class ChatApplicationService {
             try {run=snapshots.begin(owner.id(),modelSettings.snapshot(channel,policy),
                     ()->store.beginQueued(owner.id(),session,requestId,channel.id(),channel.model(),message));}
             catch(RuntimeException error){permit.close();throw error;}
+            // 准入即占会话闸门：先落库的运行不会因 HTTP 线程提交较慢而被后一条抢先执行。
+            capacity.enter(run.sessionId(), run.id());
             request=new GenerateRequest(java.util.List.of(new Message(Message.Role.SYSTEM,"会话模式："+mode+"。历史不能扩大模式权限。"),
                     new Message(Message.Role.USER,message)),new GenerateOptions(null,null,2048),java.util.List.of());
             budget=policy.budget();
             scope=new ChatWorkflow.Scope(owner.id(),sessionInfo.knowledgeBaseIds(),policy);
         }
-        return execute(run,budget,null,permit,request,events->preparation.bind(model,run.sessionId(),run.id(),mode,scope,budget,events));
+        try {
+            return execute(run,budget,null,permit,request,events->preparation.bind(model,run.sessionId(),run.id(),mode,scope,budget,events));
+        } catch (RuntimeException error) {
+            capacity.release(run.sessionId(), run.id());
+            permit.close();
+            throw error;
+        }
     }
 
     /** 原运行校验模型版本，继续使用保存的预算/策略；不会被后台新配置悄悄替换。 */
@@ -132,6 +145,8 @@ public class ChatApplicationService {
             permit=capacity.reserve(owner.id());
             try {accepted=questions.consumeQueued(owner.id(),runId,questionId,answer);}
             catch(RuntimeException error){permit.close();throw error;}
+            // 等待补充期间闸门仍由原 run 持有；这里只做幂等重入，防止异常恢复后丢锁。
+            capacity.enter(run.sessionId(), run.id());
         }
         return execute(run,accepted.snapshot().budget(),accepted.snapshot(),permit,accepted.snapshot().continuation().request(),
                 events->resumes.bind(model,accepted,mode,scope,events));
@@ -140,21 +155,22 @@ public class ChatApplicationService {
     private SseEmitter execute(ConversationRepository.Run run, RunBudget budget, PendingQuestionStore.Snapshot previous,
                                cn.ray.agent.server.run.admission.BoundedRunExecutor.Permit permit, GenerateRequest request, java.util.function.Function<ChatWorkflow.Events,LlmAdapter> factory) {
         long remaining = budget.timeoutMs() - (previous == null ? 0 : previous.activeMs());
-        SseEmitter emitter = new SseEmitter(Math.max(1, remaining) + queueTimeoutMs + 5000);
-        ChatRun execution = new ChatRun(run.id(), emitter, budget, previous,permit);
+        // 连接需要覆盖“会话排队 + 实际运行”两段；排队本身有独立上限，不消耗模型预算。
+        SseEmitter emitter = new SseEmitter(Math.max(1, remaining) + sessionQueueTimeoutMs + 5000);
+        ChatRun execution = new ChatRun(run.id(), run.sessionId(), emitter, budget, previous,permit);
         active.put(run.id(), execution);
         emitter.onCompletion(execution::disconnected);
         emitter.onError(error -> execution.disconnected());
         emitter.onTimeout(() -> execution.end("TIMED_OUT", "请求超时", "TIMED_OUT"));
         synchronized (execution) {
-            execution.deadline = timers.schedule(() -> execution.end("TIMED_OUT", "排队超过时限", "QUEUE_TIMEOUT"), queueTimeoutMs, TimeUnit.MILLISECONDS);
+            execution.deadline = timers.schedule(() -> execution.end("TIMED_OUT", "排队超过时限", "QUEUE_TIMEOUT"), sessionQueueTimeoutMs, TimeUnit.MILLISECONDS);
             execution.heartbeat = timers.scheduleAtFixedRate(execution::heartbeat, 2, 2, TimeUnit.SECONDS);
         }
         if (execution.send("meta", Map.of("sessionId", run.sessionId(), "runId", run.id(), "status","QUEUED"))) {
             execution.send("queue",Map.of("runId",run.id(),"status","QUEUED"));
             try {
                 var workflow = factory.apply(new ChatWorkflow.Events(execution::event, execution::rag));
-                dispatcher.dispatch(new RunDispatcher.Context(owner.id(),run.id(),permit,execution::started),workflow,request,execution);
+                dispatcher.dispatch(new RunDispatcher.Context(owner.id(),run.sessionId(),run.id(),run.queueSeq(),permit,execution::started),workflow,request,execution);
             } catch (RuntimeException error) { execution.onError(error); }
         }
         return emitter;
@@ -167,9 +183,12 @@ public class ChatApplicationService {
         if (run != null) {
             if (!run.end("CANCELLED", null, "CANCELLED") && state.status().equals("WAITING_USER")) {
                 questions.cancel(owner.id(), id);
+                capacity.release(state.sessionId(), id);
             }
         } else if (state.status().equals("WAITING_USER")) {
             questions.cancel(owner.id(), id);
+            // 等待补充的运行已释放全局执行槽，只持有会话闸门；取消终态落库后再放行后续消息。
+            capacity.release(state.sessionId(), id);
         } else if (java.util.Set.of("RUNNING","QUEUED").contains(state.status())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "运行正在建立，请稍后重试");
         }
@@ -185,6 +204,7 @@ public class ChatApplicationService {
     /** 每次运行独占自己的输出缓冲和终态锁；不同会话之间可以独立运行。 */
     private final class ChatRun implements Flow.Subscriber<StreamChunk> {
         private final String id;
+        private final String sessionId;
         private final SseEmitter emitter;
         private final StringBuilder output = new StringBuilder();
         private final ToolEventBridge bridge;
@@ -205,8 +225,9 @@ public class ChatApplicationService {
         private ScheduledFuture<?> deadline;
         private ScheduledFuture<?> heartbeat;
 
-        private ChatRun(String id, SseEmitter emitter, RunBudget budget, PendingQuestionStore.Snapshot previous,cn.ray.agent.server.run.admission.BoundedRunExecutor.Permit permit) {
+        private ChatRun(String id, String sessionId, SseEmitter emitter, RunBudget budget, PendingQuestionStore.Snapshot previous,cn.ray.agent.server.run.admission.BoundedRunExecutor.Permit permit) {
             this.id = id;
+            this.sessionId = sessionId;
             this.emitter = emitter;
             this.budget = budget;
             this.previous = previous;
@@ -332,6 +353,8 @@ public class ChatApplicationService {
                 emitter.completeWithError(new IllegalStateException("保存运行结果失败，请检查数据库"));
                 return false;
             } finally {
+                // 终态已尝试落库后释放会话闸门；失败/取消的轮次不会进入模型历史，放行后续消息是安全的。
+                capacity.release(sessionId, id);
                 release();
             }
         }

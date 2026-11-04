@@ -2,6 +2,7 @@ package cn.ray.agent.server.conversation;
 
 import cn.ray.agent.runtime.model.Message;
 import cn.ray.agent.runtime.model.TokenUsage;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -17,6 +18,10 @@ import java.util.UUID;
 public class ConversationRepository {
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transactions;
+
+    /** 每会话活动运行上限（含排队）；等待用户补充的运行也计入。 */
+    @Value("${ray.run.max-queued-per-session:2}")
+    private int maxActivePerSession = 2;
 
     public ConversationRepository(JdbcTemplate jdbc, PlatformTransactionManager manager) {
         this.jdbc = jdbc;
@@ -66,14 +71,14 @@ public class ConversationRepository {
 
     public List<ChatMessage> messages(String owner, String sessionId) {
         session(owner, sessionId);
-        return jdbc.query("SELECT m.* FROM ra_message m JOIN ra_run r ON r.id=m.run_id WHERE m.session_id=? ORDER BY r.created_at, r.id, CASE m.role WHEN 'USER' THEN 0 ELSE 1 END", (r, n) ->
+        return jdbc.query("SELECT m.* FROM ra_message m JOIN ra_run r ON r.id=m.run_id WHERE m.session_id=? ORDER BY r.queue_seq, CASE m.role WHEN 'USER' THEN 0 ELSE 1 END", (r, n) ->
                 new ChatMessage(r.getString("id"), r.getString("run_id"), r.getString("role"), r.getString("content"), r.getBoolean("complete")), sessionId);
     }
 
     /** 只把成功的完整轮次投影给模型，失败或取消的部分回答仍保存在历史中。 */
     public List<Message> history(String owner, String sessionId) {
         session(owner, sessionId);
-        return jdbc.query("SELECT m.* FROM ra_message m JOIN ra_run r ON r.id=m.run_id WHERE m.session_id=? AND r.status='SUCCEEDED' ORDER BY r.created_at, r.id, CASE m.role WHEN 'USER' THEN 0 ELSE 1 END", (r, n) ->
+        return jdbc.query("SELECT m.* FROM ra_message m JOIN ra_run r ON r.id=m.run_id WHERE m.session_id=? AND r.status='SUCCEEDED' ORDER BY r.queue_seq, CASE m.role WHEN 'USER' THEN 0 ELSE 1 END", (r, n) ->
                 new Message(Message.Role.valueOf(r.getString("role")), r.getString("content")), sessionId);
     }
 
@@ -90,11 +95,17 @@ public class ConversationRepository {
         return transactions.execute(status -> {
             new cn.ray.agent.server.run.admission.SessionWriteLease().acquire(jdbc,owner,sessionId);
             new cn.ray.agent.server.run.admission.RequestIdempotencyService(jdbc,this).assertNew(owner,sessionId,requestId,input,channel);
-            if (!jdbc.queryForList("SELECT id FROM ra_run WHERE session_id=? AND status IN ('CREATED','QUEUED','RUNNING','WAITING_USER')", sessionId).isEmpty()) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "当前会话已有运行，请先等待或取消");
+            // 等待用户补充时，下一轮上下文取决于这次回答；不开新运行，也不放行后续消息。
+            if (jdbc.queryForObject("SELECT COUNT(*) FROM ra_run WHERE session_id=? AND status='WAITING_USER'", Integer.class, sessionId) > 0) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "等待你补充信息，请先回答或取消");
+            }
+            int active = jdbc.queryForObject("SELECT COUNT(*) FROM ra_run WHERE session_id=? AND status IN ('CREATED','QUEUED','RUNNING','WAITING_USER')", Integer.class, sessionId);
+            if (active >= maxActivePerSession) {
+                throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "该会话排队已满，请等待或取消");
             }
             String id = UUID.randomUUID().toString();
             long now = System.currentTimeMillis();
+            // queue_seq 由数据库默认值生成，保证同一毫秒内也按准入顺序排列。
             jdbc.update("INSERT INTO ra_run(id,session_id,owner_id,client_request_id,channel_id,configured_model,status,created_at) VALUES (?,?,?,?,?,?,?,?)", id, sessionId, owner, requestId, channel, model, initialState, now);
             jdbc.update("INSERT INTO ra_message VALUES (?,?,?,'USER',?,TRUE,?)", UUID.randomUUID().toString(), sessionId, id, input, now);
             if(initialState.equals("QUEUED")) {
@@ -155,7 +166,7 @@ public class ConversationRepository {
     public Run run(String owner, String id) {
         var rows = jdbc.query("SELECT * FROM ra_run WHERE id=? AND owner_id=?", (r, n) -> new Run(
                 r.getString("id"), r.getString("session_id"), r.getString("client_request_id"), r.getString("channel_id"),
-                r.getString("configured_model"), r.getString("status"), r.getLong("created_at"), (Long) r.getObject("ended_at"),
+                r.getString("configured_model"), r.getString("status"), r.getLong("created_at"), r.getLong("queue_seq"), (Long) r.getObject("ended_at"),
                 (Integer) r.getObject("estimated_input"), (Integer) r.getObject("input_tokens"), (Integer) r.getObject("output_tokens"), r.getString("error_message")), id, owner);
         if (rows.isEmpty()) {
             throw missing();
@@ -165,7 +176,7 @@ public class ConversationRepository {
 
     public List<Run> runs(String owner, String sessionId) {
         session(owner, sessionId);
-        var ids = jdbc.queryForList("SELECT id FROM ra_run WHERE session_id=? ORDER BY created_at DESC, id", String.class, sessionId);
+        var ids = jdbc.queryForList("SELECT id FROM ra_run WHERE session_id=? ORDER BY queue_seq DESC", String.class, sessionId);
         return ids.stream().map(id -> run(owner, id)).toList();
     }
 
@@ -218,7 +229,7 @@ public class ConversationRepository {
     public record Session(String id, String title, String mode, long createdAt, List<String> knowledgeBaseIds) { }
     public record ChatMessage(String id, String runId, String role, String content, boolean complete) { }
     public record Run(String id, String sessionId, String clientRequestId, String channelId, String configuredModel,
-                      String status, long createdAt, Long endedAt, Integer estimatedInput, Integer inputTokens,
+                      String status, long createdAt, long queueSeq, Long endedAt, Integer estimatedInput, Integer inputTokens,
                       Integer outputTokens, String errorMessage) { }
     public record Event(int seq, String type, String detail, long createdAt) { }
 }

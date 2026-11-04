@@ -27,12 +27,14 @@ public class QueuedRunDispatcher implements RunDispatcher {
         handle.attach(bridge);
         subscriber.onSubscribe(handle);
         if (!context.permit().closed()) {
-            executor.submit(context.permit(), () -> {
+            executor.submit(context.permit(), context.sessionId(), context.runId(), context.queueSeq(), () -> {
                 try {
                     if (context.permit().closed()) {
                         return;
                     }
                     if (!states.start(context.ownerId(), context.runId())) {
+                        // 启动事务未成功时下游不会收到终态；这里释放闸门，避免会话被永久挡住。
+                        executor.release(context.sessionId(), context.runId());
                         bridge.cancel();
                         return;
                     }
@@ -43,7 +45,7 @@ public class QueuedRunDispatcher implements RunDispatcher {
                 } catch (Throwable error) {
                     bridge.onError(error);
                 }
-            });
+            }, () -> bridge.onError(new IllegalStateException("运行执行器拒绝任务，请稍后重试")));
         }
         return handle;
     }

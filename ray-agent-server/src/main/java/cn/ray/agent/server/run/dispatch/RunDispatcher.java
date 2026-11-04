@@ -12,5 +12,10 @@ import java.util.concurrent.Flow;
 public interface RunDispatcher {
     RunHandle dispatch(Context context,LlmAdapter adapter, GenerateRequest request, Flow.Subscriber<StreamChunk> subscriber);
 
-    record Context(String ownerId,String runId,BoundedRunExecutor.Permit permit,Runnable started) { }
+    record Context(String ownerId,String sessionId,String runId,long queueSeq,BoundedRunExecutor.Permit permit,Runnable started) {
+        /** 兼容不参与会话串行的单元测试与直接调度。 */
+        public Context(String ownerId,String runId,BoundedRunExecutor.Permit permit,Runnable started) {
+            this(ownerId,null,runId,0,permit,started);
+        }
+    }
 }

@@ -22,7 +22,7 @@ public class SessionRebuilder {
     public List<Turn> turns(String owner, String session) {
         store.session(owner, session);
         var result = new ArrayList<Turn>();
-        var runs = jdbc.queryForList("SELECT id FROM ra_run WHERE session_id=? AND owner_id=? AND status='SUCCEEDED' ORDER BY created_at,id", session, owner);
+        var runs = jdbc.queryForList("SELECT id FROM ra_run WHERE session_id=? AND owner_id=? AND status='SUCCEEDED' ORDER BY queue_seq", session, owner);
         for (var row : runs) {
             String run = row.get("id").toString();
             var messages = jdbc.query("SELECT role,content FROM ra_message WHERE run_id=? AND complete=TRUE ORDER BY CASE role WHEN 'USER' THEN 0 ELSE 1 END",
