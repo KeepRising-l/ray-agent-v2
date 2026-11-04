@@ -86,7 +86,8 @@ export function createChatSession({ api = requestJson, stream = streamChat, answ
     }
     state.sessionId = id; state.draft = drafts.get(id) || ''; state.status = notice.status || ''
     state.error = notice.error || null; state.pending = notice.pending || null; state.partial = notice.partial || null
-    if (!state.draft && notice.pending) state.draft = notice.pending.message
+    // 运行中切回会话时，消息已提交并显示，不再回填输入框；只有未确认的请求才恢复文字。
+    if (!state.draft && notice.pending && !operations.has(id)) state.draft = notice.pending.message
     if (notice.pending?.channelId && state.channels.some(channel => channel.id === notice.pending.channelId)) state.channelId = notice.pending.channelId
     clearView(); state.fetching = true; save('ray-session', id)
     const token = selection
@@ -153,8 +154,8 @@ export function createChatSession({ api = requestJson, stream = streamChat, answ
         : await stream(payload.message, op.controller.signal, text, payload.channelId, options)
       terminal = true
       status(result === 'WAITING_USER' ? '等待你补充信息，运行已暂停' : refused ? '资料依据不足' : '本次运行已结束')
-      if (visible()) { state.draft = ''; state.pending = null }
-      drafts.set(sid, '')
+      // 输入框在提交时已清空；这里不再清，避免覆盖运行期间重新输入的内容。
+      if (visible()) state.pending = null
       notices.set(sid, { status: op.view.status })
       forgetPending(sid)
     } catch (error) {
@@ -173,6 +174,11 @@ export function createChatSession({ api = requestJson, stream = streamChat, answ
         state.pending = pending
         if (error.runId) state.currentRun = { id: error.runId }
       }
+      // 请求未完成时把问题放回输入框，便于修改后重发（沿用原请求编号，不产生重复运行）。
+      if (!question) {
+        if (visible() && !state.draft) state.draft = payload.message
+        else if (!visible()) drafts.set(sid, payload.message)
+      }
     } finally {
       op.view.settled = true
       if (visible()) {
@@ -190,12 +196,15 @@ export function createChatSession({ api = requestJson, stream = streamChat, answ
     if (!canSend.value) return
     const message = state.draft.trim(); const channelId = state.channelId
     if (!state.sessionId && !await create()) return
-    state.draft = message
     const previous = state.pending
     const clientRequestId = previous && previous.sessionId === state.sessionId && previous.message === message && previous.channelId === channelId
       ? previous.clientRequestId : crypto.randomUUID()
     const payload = { message, channelId, sessionId: state.sessionId, clientRequestId }
     state.pending = payload
+    // 发送即清空输入框，并先在本地显示这条用户消息；服务端历史在运行结束后刷新校准。
+    state.draft = ''
+    drafts.set(state.sessionId, '')
+    state.messages.push({ id: `local-${clientRequestId}`, role: 'USER', content: message, complete: true })
     await execute(payload)
   }
   async function answer(value) {

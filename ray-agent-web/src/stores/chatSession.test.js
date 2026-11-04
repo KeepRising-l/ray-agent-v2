@@ -36,6 +36,18 @@ test('历史轨迹异步查询不覆盖后来选择的run，事件按序号去�
   assert.equal(chat.state.currentRun.id, 'r2'); assert.deepEqual(chat.state.events.map(e => e.seq), [1, 2])
 })
 
+test('发送后立即清空输入框并显示用户消息，流未结束也不等刷新', async () => {
+  const finish = deferred(); let handlers
+  const { chat } = harness({}, async (_m, _s, _t, _c, options) => { handlers = options; await finish.promise; return 'STOP' })
+  await chat.init(); chat.state.draft = 'A草稿'; const running = chat.submit()
+  // 运行尚未结束：输入框已清空，用户消息已在界面中先行显示。
+  assert.equal(chat.state.draft, '')
+  assert.equal(chat.state.messages.at(-1).role, 'USER')
+  assert.equal(chat.state.messages.at(-1).content, 'A草稿')
+  finish.resolve(); await running
+  assert.equal(chat.state.draft, '')
+})
+
 test('切换时流仍属原会话，不把文本或事件灌入其他会话，草稿分别保留', async () => {
   const finish = deferred(); let handlers; let write
   const { chat } = harness({}, async (_m, _s, text, _c, options) => { handlers = options; write = text; await finish.promise; return 'STOP' })
@@ -43,7 +55,7 @@ test('切换时流仍属原会话，不把文本或事件灌入其他会话，�
   handlers.onMeta({ runId: 'ra', status: 'RUNNING' }); write('A输出')
   await chat.select('b'); chat.state.draft = 'B草稿'; handlers.onTool({ seq: 1, type: 'TOOL_STARTED' }); write('继续')
   assert.equal(chat.liveAnswer.value, ''); assert.deepEqual(chat.state.events, []); assert.equal(chat.busy.value, false)
-  await chat.select('a'); assert.equal(chat.liveAnswer.value, 'A输出继续'); assert.equal(chat.state.draft, 'A草稿')
+  await chat.select('a'); assert.equal(chat.liveAnswer.value, 'A输出继续'); assert.equal(chat.state.draft, '')
   finish.resolve(); await running; await chat.select('b'); assert.equal(chat.state.draft, 'B草稿')
 })
 
